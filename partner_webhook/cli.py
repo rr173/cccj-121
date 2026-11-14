@@ -11,6 +11,9 @@
   replay-event   用保存的原始体与头重新投递（支持模拟时间）
   drain-outbox   把待投递 outbox 标记为已投递（下游占位实现）
   stats          汇总统计
+  index-sync     从接收库（只读）同步本地 JSON 正文索引
+  index-status   查看当前已发布索引代与跳过原因
+  index-query    用 JSON 表达式在索引上查询（必填合作方）
 """
 
 from __future__ import annotations
@@ -298,6 +301,93 @@ def cmd_stats(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------- #
+# 本地 JSON 正文索引
+# --------------------------------------------------------------------- #
+def cmd_index_sync(args) -> int:
+    from partner_webhook.indexstore import IndexError_, sync_index
+
+    try:
+        report = sync_index(
+            source_db=args.db, index_db=args.index_db,
+            simulate_crash_after_nodes=args.simulate_crash_after_nodes,
+        )
+    except IndexError_ as exc:
+        print(f"索引同步失败: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # 同步失败：整代回滚，不输出半份报告
+        print(f"索引同步失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    _print_json(report.as_dict())
+    return 0
+
+
+def cmd_index_status(args) -> int:
+    from partner_webhook.indexstore import IndexError_, index_status
+
+    try:
+        _print_json(index_status(args.index_db))
+    except IndexError_ as exc:
+        print(f"索引不可用: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"索引不可用: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _read_expression(args) -> str:
+    if args.expr_file:
+        return Path(args.expr_file).read_text(encoding="utf-8")
+    if args.expr:
+        return args.expr
+    print("必须用 --expr 或 --expr-file 提供 JSON 查询表达式", file=sys.stderr)
+    return None
+
+
+def cmd_index_query(args) -> int:
+    from partner_webhook.indexstore import IndexError_, connect_index
+    from partner_webhook.query import (
+        QueryError, parse_expression_text, run_query,
+    )
+
+    text = _read_expression(args)
+    if text is None:
+        return 2
+    try:
+        expr = parse_expression_text(text)
+    except QueryError as exc:
+        print(f"查询表达式非法: {exc}", file=sys.stderr)
+        return 2
+    try:
+        conn = connect_index(args.index_db, read_only=True)
+    except Exception as exc:
+        print(f"索引库无法打开: {exc}", file=sys.stderr)
+        return 1
+    try:
+        result = run_query(
+            conn, partner_id=args.partner, expr=expr,
+            limit=args.limit, offset=args.offset,
+        )
+        _print_json({
+            "partner_id": result.partner_id,
+            "generation": result.generation,
+            "total": result.total,
+            "limit": result.limit,
+            "offset": result.offset,
+            "events": result.events,
+        })
+    except (QueryError, IndexError_) as exc:
+        print(f"查询失败: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # 任何异常都不输出半份结果
+        print(f"查询失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="partner-webhook",
@@ -380,6 +470,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_drain.set_defaults(func=cmd_drain)
 
     sub.add_parser("stats", help="汇总统计").set_defaults(func=cmd_stats)
+
+    p_isync = sub.add_parser("index-sync", help="从接收库同步本地 JSON 正文索引")
+    p_isync.add_argument("--index-db", required=True, help="索引库路径（与接收库分离）")
+    p_isync.add_argument("--simulate-crash-after-nodes", action="store_true",
+                         help="测试专用：节点已写入但未提交时强制结束进程")
+    p_isync.set_defaults(func=cmd_index_sync)
+
+    p_istatus = sub.add_parser("index-status", help="查看索引代与跳过原因")
+    p_istatus.add_argument("--index-db", required=True)
+    p_istatus.set_defaults(func=cmd_index_status)
+
+    p_iquery = sub.add_parser("index-query", help="用 JSON 表达式查询正文索引")
+    p_iquery.add_argument("--index-db", required=True)
+    p_iquery.add_argument("--partner", required=True,
+                          help="合作方筛选（必填，防止跨合作方泄露）")
+    p_iquery.add_argument("--expr", default=None, help="JSON 查询表达式")
+    p_iquery.add_argument("--expr-file", default=None,
+                          help="从文件读取 JSON 查询表达式")
+    p_iquery.add_argument("--limit", type=int, default=100)
+    p_iquery.add_argument("--offset", type=int, default=0)
+    p_iquery.set_defaults(func=cmd_index_query)
     return parser
 
 

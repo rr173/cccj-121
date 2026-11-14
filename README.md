@@ -106,6 +106,90 @@ python3 -I partner_webhook/salvage.py --db 镜像.db --out 新输出目录 \
 正常收件与查询仍沿用 `cli.py` 的已有入口，提取器是完全离线的独立命令。
 验收演示（真实建库 → 破坏 → 提取 → 独立核对）：`bash demo_salvage.sh`。
 
+### 7. 本地 JSON 正文索引与结构查询（`indexstore.py` / `query.py`）
+
+合作方会把一组测量放在同一个事件正文里。若把 `metric` 与 `value` 各自摊平
+再搜，会出现「同一事件里温度 20、湿度 80 也命中温度>30」的误报。本索引为
+本地分析单独建库，**按数组元素保留归属**，让组合条件能查对。
+
+```bash
+# 首次建立 / 之后每次同步（源库只读，索引库独立）
+python3 -I partner_webhook/cli.py --db webhook.db \
+    index-sync --index-db analysis-index.db
+python3 -I partner_webhook/cli.py --db webhook.db \
+    index-status --index-db analysis-index.db
+
+# 查询必须指定合作方；表达式用 JSON 给出
+python3 -I partner_webhook/cli.py --db webhook.db \
+    index-query --index-db analysis-index.db --partner acme \
+    --expr '{"any":{"path":["measurements"],"where":{"and":[
+               {"eq":{"path":["metric"],"value":"temperature"}},
+               {"gt":{"path":["value"],"value":30}}]}}}'
+```
+
+#### 正文解释
+
+数据来自正常接收库的 `accepted_events` 与其关联的 `raw_bodies`，经 SQLite
+**只读连接**读取。正文先核对登记摘要与长度，再做严格 UTF-8 JSON 解释：
+
+- 根必须是对象；同一对象内重复键直接拒绝（不采用后值覆盖）；
+- 不接受 NaN / Infinity / -Infinity、BOM、截断文本、尾随内容；
+- 数字保留原文十进制（不经 float / REAL），`1`、`1.0`、`1e400`、相邻超大
+  整数都能精确保留。
+
+不是这种 JSON 的正文**仍是合法收件**：索引逐条登记 `reason_code` 与原因，
+把该事件标为 `skipped`，其他事件继续索引。非文本字节、错误字段不会被强行
+转字符串混进搜索结果。
+
+#### 表达式语法（有限集合）
+
+| 操作 | 形状 |
+| --- | --- |
+| `and` / `or` | `{"and":[expr, ...]}` / `{"or":[...]}`，列表必须非空 |
+| `not` | `{"not": expr}`，按当前作用域真假取反 |
+| `any` | `{"any":{"path":[...], "where":expr}}` |
+| `exists` | `{"exists":{"path":[...]}}` |
+| `eq`/`lt`/`lte`/`gt`/`gte` | `{"eq":{"path":[...], "value":标量}}`，有序比较只接受数字 value |
+
+规则：
+
+- 每个表达式对象**只允许一个操作**；未知键、多余参数、空逻辑列表、非标量
+  比较值都会明确报错（CLI 退出码 2，错误只写 stderr，stdout 为空，不会留下
+  半份结果），不会退化成普通文本检索。
+- `path` 是字符串段数组，每段就是对象真实键名；点、斜杠、空格、空键名都
+  没有特殊含义，空 `path` 表示当前值本身（在 `any` 里即「当前元素/数组」）。
+  **只有 `any` 可以跨过数组**，字符串段永远不会被当作数组下标；根必须是
+  对象，因此根级路径只能按键名进入。
+- `any` 把数组每个元素作为当前对象，只有同一个元素满足整个 `where` 才算
+  命中；嵌套 `any` 的内层路径从内层元素出发。两个并列 `any` 各自找元素，
+  允许命中不同元素——不会擅自加同元素限制。
+- 缺失 ≠ 显式 `null`：`exists` 对显式 `null` 仍为真，`eq null` 只命中真正
+  写了 `null` 的位置。`eq` 按 JSON 类型比较（`false` ≠ `0`，`1` = `1.0`，
+  `"1"` ≠ `1`）；有序比较只适用于数字，类型不符或路径缺失为假。
+- `any` 目标缺失 / 非数组 / 空数组均为假。
+- 顶层 `not` 只在指定合作方的**可查询事件集合**（`status='indexed'`）内取反，
+  未通过正文检查的事件不会因此变成命中。
+- 输出 `total`（完整匹配数）与 `events`（当前页事件身份），按 `event_id`
+  稳定排序；分页在 SQL 中先算完整条件再截页，不会先截候选再生效 `any`/`not`。
+  总数与分页行来自同一只读事务、同一代索引。合作方筛选必填。
+
+
+#### 索引生命周期
+
+- 索引库与接收库分离；同步只以 `mode=ro` + `query_only` 打开源库，**同步
+  失败不会写坏在线接收库**。
+- 源库在一个只读读事务里取事件集快照；索引侧全部写入在**同一个写事务**：
+  解析/复用正文节点 → 登记事件 → 发布。提交前退出，上一代索引仍完整可查；
+  重开后执行一次 `index-sync` 即得到新一代。不会出现「事件登记已更新但查询
+  仍命中旧字段」的中间状态。
+- 同步语义：新增事件进入索引；同一事件换正文则整份替换（新代重新登记，旧
+  正文节点在发布时清理）；源表已不存在的事件从索引移除；未变化的正文按
+  `(摘要, 解析器版本, 长度)` 复用，不重复解析。同摘要被多事件引用时节点
+  按摘要共享、只读不改写。重复同步不增加重复节点或事件。
+- **查询不读源库**：同步后可暂时无法访问源库仍能执行（验收演示会实际改名
+  源库后查询）。
+
+
 ## 目录结构
 
 ```
@@ -117,15 +201,21 @@ partner_webhook/
   service.py     验证流水线（与传输层解耦，可注入时钟）
   generator.py   本地请求生成器（签名 + 环回发送）
   server.py      http.server 环回收件服务
-  cli.py         命令行入口（在线收件与查询）
+  cli.py         命令行入口（在线收件、查询与索引命令）
   salvage.py     离线接收库提取器（直接解释 SQLite 文件页，不经过 SQL 引擎）
+  strictjson.py  严格 UTF-8 JSON 解析（拒绝重复键/NaN/截断，数字精确保留）
+  indexstore.py  持久正文索引（路径 + 类型 + 数组实例，代际发布）
+  query.py       有限 JSON 表达式校验、SQL 编译与分页查询
+  direct_eval.py 小样本独立核对器（直接解释 JSON 树，不走索引 SQL）
 migrations/0001_init.sql
 partner_webhook/migrations/   同一迁移的包内副本（打包安装时随包分发，需与上者保持同步）
 config.example.json
-tests/           70 个自动化测试
+tests/           自动化测试
 scripts/salvage_acceptance.py   提取器验收材料（真实建库/破坏/独立核对，可复跑）
+scripts/index_acceptance.py     正文索引验收材料（真实收件/同步/查询/独立核对）
 demo.sh          在线收件端到端演示（本地环回，不连外网）
 demo_salvage.sh  提取器验收演示（真实破坏与退出码矩阵）
+demo_index.sh    正文索引验收演示（反例、跨元素、同步增删改、崩溃恢复）
 ```
 
 ## 快速开始
@@ -160,6 +250,9 @@ python3 -I partner_webhook/cli.py send \
 | `replay-event <id>` | 用保存的原始体重投（`--key-version` 换密钥、`--refresh-timestamp` 刷新时间戳、`--now` 模拟时钟） |
 | `drain-outbox` | 按源序号顺序投递 outbox（下游占位实现） |
 | `stats` | 接收/投递汇总统计 |
+| `index-sync` | 从接收库（只读）同步本地 JSON 正文索引，发布新一代 |
+| `index-status` | 查看当前索引代、事件状态与跳过原因 |
+| `index-query` | 用 JSON 表达式查询索引，必填 `--partner` |
 
 离线抢救（独立于上表，不经过在线入口）：
 
@@ -200,5 +293,16 @@ python3 -I -m unittest discover -s tests -t . -v
   叶页/单 cell/溢出链切断/溢出成环/共享页/目录损坏/布局不符/截短文件/
   正文摘要失配/非空 WAL 旁文件/资源上限/输出目录已存在的退出码与隔离粒度；
   提取前后源文件摘要不变、片段可独立拼回正文、提取模块不 import sqlite3。
+- 正文索引：严格 JSON（重复键/NaN/Infinity/截断/非 UTF-8/根非对象）、
+  数字精确判等与排序；同元素组合条件（温度 20 + 湿度 80 反例）、嵌套与
+  并列 `any`、`not`、缺失/null/false/0、空数组、点/斜杠/空键、数字不冒充
+  下标；合作方隔离、分页先算条件再截页、非法表达式退出码；同步新增/替换/
+  删除、重复同步不重复解析、共享摘要不互相改写、未提交崩溃后旧代完整、
+  源库不可用时仍可查询。
 
-一键演示：`bash demo.sh`（在线收件）；`bash demo_salvage.sh`（离线抢救验收）
+正文索引验收材料可复跑：`python3 -I scripts/index_acceptance.py`（100 项
+断言，含逐表达式与直接 JSON 解释器的交叉核对）。
+
+一键演示：`bash demo.sh`（在线收件）；`bash demo_salvage.sh`（离线抢救验收）；
+`bash demo_index.sh`（正文索引验收：反例、组合条件、独立核对、同步增删改与
+崩溃恢复）。
