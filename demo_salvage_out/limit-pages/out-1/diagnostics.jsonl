@@ -1,0 +1,3 @@
+{"seq": 1, "severity": "error", "code": "page_limit_reached", "tree": "raw_bodies", "page": 676, "path": ["542", "cell4", "676"], "detail": {"limit": 264}}
+{"seq": 2, "severity": "warning", "code": "event_missing_body", "tree": "accepted_events", "page": 679, "detail": {"rowid": 245, "partner_id": "acme", "event_id": "evt-special-big1", "body_sha256": "e2e7dd02eb38872019d343bd63328dd54270ed211448d4df1b43ff7a4a28bc21", "note": "事件引用的正文未能完整解码"}}
+{"seq": 3, "severity": "warning", "code": "event_missing_body", "tree": "accepted_events", "page": 679, "detail": {"rowid": 1152921504606846976, "partner_id": "acme", "event_id": "evt-huge-rowid", "body_sha256": "f3590436887bf7d390fe58c525b2cdb6f17e893dcc5d1306ebc92f547b785157", "note": "事件引用的正文未能完整解码"}}

@@ -1,0 +1,2 @@
+{"seq": 1, "severity": "info", "code": "unassociated_body", "tree": "raw_bodies", "page": 390, "detail": {"rowid": 1505, "body_sha256": "0ac23fd7d239e4da9b423c29ef7f8a464f580530054974465a8714929131b2f8", "note": "没有事件引用该正文（可能来自拒收或冲突投递），按原样保留，不判为损坏"}}
+{"seq": 2, "severity": "info", "code": "unassociated_body", "tree": "raw_bodies", "page": 390, "detail": {"rowid": 1506, "body_sha256": "ee268a71b05de985c2d7b596eede7bb289ad999b071882bc65e653b9c52e58a6", "note": "没有事件引用该正文（可能来自拒收或冲突投递），按原样保留，不判为损坏"}}

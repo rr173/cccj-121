@@ -1,0 +1,61 @@
+{
+  "tool": "partner_webhook.salvage",
+  "purpose": "离线抢救提取：不修复源库，不回写在线接收或 outbox",
+  "source": {
+    "path": "/workspace/demo_salvage_out/truncated/damaged.db",
+    "size_bytes": 210944,
+    "sha256": "83b7ea8375e5531b4a5bd4b36c03c1b4bd81fcf2037618c429949a04ed28e9ab",
+    "page_size": 512,
+    "usable_page_size": 512,
+    "reserved_bytes": 0,
+    "pages_total": 412,
+    "pages_visited": 103
+  },
+  "tables": {
+    "raw_bodies": {
+      "root_page": 2,
+      "columns": [
+        "body_sha256",
+        "body_blob",
+        "byte_length",
+        "first_seen_at"
+      ]
+    },
+    "accepted_events": {
+      "root_page": 11,
+      "columns": [
+        "event_id",
+        "partner_id",
+        "source_seq",
+        "key_version",
+        "body_sha256",
+        "ingest_record_id",
+        "claimed_timestamp",
+        "accepted_at"
+      ]
+    }
+  },
+  "limits": {
+    "max_payload_bytes": 268435456,
+    "max_pages": 2000000,
+    "max_diagnostics": 20000
+  },
+  "unfinished_reasons": [],
+  "contested_pages": [],
+  "counts": {
+    "events_confirmed": 179,
+    "events_quarantined": 0,
+    "bodies_verified": 182,
+    "bodies_unverified": 0,
+    "bodies_quarantined": 0,
+    "bodies_unassociated": 4,
+    "diagnostics": {
+      "info": 4,
+      "warning": 2,
+      "error": 36
+    },
+    "diagnostics_dropped": 0
+  },
+  "exit_code": 2,
+  "evidence_boundary": "本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。"
+}

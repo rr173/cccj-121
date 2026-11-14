@@ -1,0 +1,42 @@
+{"seq": 1, "severity": "warning", "code": "db_size_mismatch", "detail": {"header_pages": 687, "file_pages": 412, "note": "头内登记页数与文件实际页数不一致，疑似截短或残留"}}
+{"seq": 2, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 3, "child": 687, "page_count": 412}}
+{"seq": 3, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 46, "child": 413, "page_count": 412}}
+{"seq": 4, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 47, "child": 421, "page_count": 412}}
+{"seq": 5, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 48, "child": 428, "page_count": 412}}
+{"seq": 6, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 49, "child": 438, "page_count": 412}}
+{"seq": 7, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 50, "child": 446, "page_count": 412}}
+{"seq": 8, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 51, "child": 454, "page_count": 412}}
+{"seq": 9, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 52, "child": 462, "page_count": 412}}
+{"seq": 10, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 53, "child": 472, "page_count": 412}}
+{"seq": 11, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 54, "child": 482, "page_count": 412}}
+{"seq": 12, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 55, "child": 493, "page_count": 412}}
+{"seq": 13, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 56, "child": 502, "page_count": 412}}
+{"seq": 14, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 57, "child": 509, "page_count": 412}}
+{"seq": 15, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 58, "child": 516, "page_count": 412}}
+{"seq": 16, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 59, "child": 524, "page_count": 412}}
+{"seq": 17, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 60, "child": 532, "page_count": 412}}
+{"seq": 18, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": 61, "child": 544, "page_count": 412}}
+{"seq": 19, "severity": "error", "code": "child_out_of_bounds", "tree": "accepted_events", "page": 11, "path": ["11"], "detail": {"cell_index": "rightmost", "child": 679, "page_count": 412}}
+{"seq": 20, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 3, "child": 686, "page_count": 412}}
+{"seq": 21, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 50, "child": 418, "page_count": 412}}
+{"seq": 22, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 51, "child": 425, "page_count": 412}}
+{"seq": 23, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 52, "child": 433, "page_count": 412}}
+{"seq": 24, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 53, "child": 443, "page_count": 412}}
+{"seq": 25, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 54, "child": 451, "page_count": 412}}
+{"seq": 26, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 55, "child": 459, "page_count": 412}}
+{"seq": 27, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 56, "child": 469, "page_count": 412}}
+{"seq": 28, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 57, "child": 479, "page_count": 412}}
+{"seq": 29, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 58, "child": 486, "page_count": 412}}
+{"seq": 30, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 59, "child": 495, "page_count": 412}}
+{"seq": 31, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 60, "child": 500, "page_count": 412}}
+{"seq": 32, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 61, "child": 507, "page_count": 412}}
+{"seq": 33, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 62, "child": 514, "page_count": 412}}
+{"seq": 34, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 63, "child": 522, "page_count": 412}}
+{"seq": 35, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 64, "child": 530, "page_count": 412}}
+{"seq": 36, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": 65, "child": 542, "page_count": 412}}
+{"seq": 37, "severity": "error", "code": "child_out_of_bounds", "tree": "raw_bodies", "page": 2, "path": ["2"], "detail": {"cell_index": "rightmost", "child": 682, "page_count": 412}}
+{"seq": 38, "severity": "warning", "code": "event_missing_body", "tree": "accepted_events", "page": 43, "detail": {"rowid": 13, "partner_id": "acme", "event_id": "evt-0012", "body_sha256": "4ed0a07d6c9e1ca148b0f04eb265ccf79d5355ea7119ee7340d685b81615652f", "note": "事件引用的正文未能完整解码"}}
+{"seq": 39, "severity": "info", "code": "unassociated_body", "tree": "raw_bodies", "page": 38, "detail": {"rowid": 11, "body_sha256": "421c8442a716cf15cc4ff40ad48620c9624f4d6ff747edf1a9b02c07566712c9", "note": "没有事件引用该正文（可能来自拒收或冲突投递），按原样保留，不判为损坏"}}
+{"seq": 40, "severity": "info", "code": "unassociated_body", "tree": "raw_bodies", "page": 411, "detail": {"rowid": 181, "body_sha256": "2bc4e76b7c46b8bdcc82cd432219eb09bd98244a1f05bdf785c36c3d6236b0c7", "note": "没有事件引用该正文（可能来自拒收或冲突投递），按原样保留，不判为损坏"}}
+{"seq": 41, "severity": "info", "code": "unassociated_body", "tree": "raw_bodies", "page": 411, "detail": {"rowid": 182, "body_sha256": "6fe81ee633271f180348d1bf28f10a0017810477572f4d828a76595f42f90240", "note": "没有事件引用该正文（可能来自拒收或冲突投递），按原样保留，不判为损坏"}}
+{"seq": 42, "severity": "info", "code": "unassociated_body", "tree": "raw_bodies", "page": 411, "detail": {"rowid": 183, "body_sha256": "c3cd79f7419b7d6287c0e692e9a0e3ea7ba1acda63dd135504c304d452485156", "note": "没有事件引用该正文（可能来自拒收或冲突投递），按原样保留，不判为损坏"}}

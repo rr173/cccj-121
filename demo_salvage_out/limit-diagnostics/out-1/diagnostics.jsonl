@@ -1,0 +1,4 @@
+{"seq": 1, "severity": "error", "code": "bad_page_type", "tree": "accepted_events", "page": 24, "path": ["11", "24"], "detail": {"type_byte": 0, "expected": "5(内部)/13(叶子)"}}
+{"seq": 2, "severity": "error", "code": "bad_page_type", "tree": "accepted_events", "page": 25, "path": ["11", "25"], "detail": {"type_byte": 0, "expected": "5(内部)/13(叶子)"}}
+{"seq": 3, "severity": "error", "code": "bad_page_type", "tree": "accepted_events", "page": 36, "path": ["11", "36"], "detail": {"type_byte": 0, "expected": "5(内部)/13(叶子)"}}
+{"seq": 4, "severity": "error", "code": "diagnostics_limit_reached", "detail": {"limit": 3, "note": "诊断条数达到上限，后续诊断被丢弃"}}

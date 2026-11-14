@@ -1,0 +1,61 @@
+{
+  "tool": "partner_webhook.salvage",
+  "purpose": "离线抢救提取：不修复源库，不回写在线接收或 outbox",
+  "source": {
+    "path": "/workspace/demo_salvage_out/healthy-4096/healthy-4096.db",
+    "size_bytes": 1609728,
+    "sha256": "0fa7713fd29946a1401a19457bde3c915cb737d069c07e137d62ab62e00eb653",
+    "page_size": 4096,
+    "usable_page_size": 4096,
+    "reserved_bytes": 0,
+    "pages_total": 393,
+    "pages_visited": 139
+  },
+  "tables": {
+    "raw_bodies": {
+      "root_page": 2,
+      "columns": [
+        "body_sha256",
+        "body_blob",
+        "byte_length",
+        "first_seen_at"
+      ]
+    },
+    "accepted_events": {
+      "root_page": 8,
+      "columns": [
+        "event_id",
+        "partner_id",
+        "source_seq",
+        "key_version",
+        "body_sha256",
+        "ingest_record_id",
+        "claimed_timestamp",
+        "accepted_at"
+      ]
+    }
+  },
+  "limits": {
+    "max_payload_bytes": 268435456,
+    "max_pages": 2000000,
+    "max_diagnostics": 20000
+  },
+  "unfinished_reasons": [],
+  "contested_pages": [],
+  "counts": {
+    "events_confirmed": 1506,
+    "events_quarantined": 0,
+    "bodies_verified": 1508,
+    "bodies_unverified": 0,
+    "bodies_quarantined": 0,
+    "bodies_unassociated": 2,
+    "diagnostics": {
+      "info": 2,
+      "warning": 0,
+      "error": 0
+    },
+    "diagnostics_dropped": 0
+  },
+  "exit_code": 0,
+  "evidence_boundary": "本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。"
+}

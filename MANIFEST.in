@@ -3,4 +3,6 @@ include config.example.json
 recursive-include migrations *.sql
 recursive-include partner_webhook/migrations *.sql
 recursive-include tests *.py
+recursive-include scripts *.py
 include demo.sh
+include demo_salvage.sh

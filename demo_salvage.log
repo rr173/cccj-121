@@ -1,0 +1,194 @@
+>>> 验收工作目录: /workspace/demo_salvage_out（重建）
+验收工作目录: /workspace/demo_salvage_out
+========================================================================
+
+### 正常库（页长 512，240 事件，大正文 [5000, 60000]）
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/healthy-512/healthy-512.db --out /workspace/demo_salvage_out/healthy-512/out-1
+    源镜像: /workspace/demo_salvage_out/healthy-512/healthy-512.db（页长 512，共 687 页，sha256 1c7a2a7fe93c2ff9…）
+    事件: 已确认 247，被隔离 0；正文: 已验证 249，未验证 0，被隔离 0，未关联 2
+    诊断: info 2 / warning 0 / error 0 -> /workspace/demo_salvage_out/healthy-512/out-1/diagnostics.jsonl
+    退出码 0：完整提取，未发现损坏、歧义或失配
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 0（0.17s）
+    汇总: {"events_confirmed": 247, "events_quarantined": 0, "bodies_verified": 249, "bodies_unverified": 0, "bodies_quarantined": 0, "bodies_unassociated": 2, "diagnostics": {"info": 2, "warning": 0, "error": 0}, "diagnostics_dropped": 0}
+  [PASS] healthy-512: 完整提取且与 SQL 参照一致
+
+### 正常库（页长 4096，1500 事件，大正文 [200000]）
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/healthy-4096/healthy-4096.db --out /workspace/demo_salvage_out/healthy-4096/out-1
+    源镜像: /workspace/demo_salvage_out/healthy-4096/healthy-4096.db（页长 4096，共 393 页，sha256 0fa7713fd29946a1…）
+    事件: 已确认 1506，被隔离 0；正文: 已验证 1508，未验证 0，被隔离 0，未关联 2
+    诊断: info 2 / warning 0 / error 0 -> /workspace/demo_salvage_out/healthy-4096/out-1/diagnostics.jsonl
+    退出码 0：完整提取，未发现损坏、歧义或失配
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 0（0.92s）
+    汇总: {"events_confirmed": 1506, "events_quarantined": 0, "bodies_verified": 1508, "bodies_unverified": 0, "bodies_quarantined": 0, "bodies_unassociated": 2, "diagnostics": {"info": 2, "warning": 0, "error": 0}, "diagnostics_dropped": 0}
+  [PASS] healthy-4096: 完整提取且与 SQL 参照一致
+
+### 正常库（页长 65536，150 事件，大正文 [300000]）
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/healthy-65536/healthy-65536.db --out /workspace/demo_salvage_out/healthy-65536/out-1
+    源镜像: /workspace/demo_salvage_out/healthy-65536/healthy-65536.db（页长 65536，共 16 页，sha256 c96b33d68bc7a391…）
+    事件: 已确认 156，被隔离 0；正文: 已验证 158，未验证 0，被隔离 0，未关联 2
+    诊断: info 2 / warning 0 / error 0 -> /workspace/demo_salvage_out/healthy-65536/out-1/diagnostics.jsonl
+    退出码 0：完整提取，未发现损坏、歧义或失配
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 0（0.13s）
+    汇总: {"events_confirmed": 156, "events_quarantined": 0, "bodies_verified": 158, "bodies_unverified": 0, "bodies_quarantined": 0, "bodies_unassociated": 2, "diagnostics": {"info": 2, "warning": 0, "error": 0}, "diagnostics_dropped": 0}
+  [PASS] healthy-65536: 完整提取且与 SQL 参照一致
+
+### 破坏：accepted_events 的一个叶页
+  目标叶页 24（4 条事件应隔离，其余 243 条应保留）
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/corrupt-leaf/damaged.db --out /workspace/demo_salvage_out/corrupt-leaf/out-1
+    源镜像: /workspace/demo_salvage_out/corrupt-leaf/damaged.db（页长 512，共 687 页，sha256 5a595c21ddb59fdc…）
+    事件: 已确认 243，被隔离 0；正文: 已验证 249，未验证 0，被隔离 0，未关联 6
+    诊断: info 6 / warning 0 / error 1 -> /workspace/demo_salvage_out/corrupt-leaf/out-1/diagnostics.jsonl
+    退出码 2：部分结果已保留在 /workspace/demo_salvage_out/corrupt-leaf/out-1，请依据诊断人工核对
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 2（0.14s）
+  [PASS] corrupt-leaf: 坏页隔离、其余保留
+
+### 破坏：单个 cell（cell 指针指向界外）
+  目标事件 evt-neg-rowid（叶页 24 cell 0）
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/corrupt-cell/damaged.db --out /workspace/demo_salvage_out/corrupt-cell/out-1
+    源镜像: /workspace/demo_salvage_out/corrupt-cell/damaged.db（页长 512，共 687 页，sha256 63b3e04c36ba0324…）
+    事件: 已确认 246，被隔离 0；正文: 已验证 249，未验证 0，被隔离 0，未关联 3
+    诊断: info 3 / warning 0 / error 1 -> /workspace/demo_salvage_out/corrupt-cell/out-1/diagnostics.jsonl
+    退出码 2：部分结果已保留在 /workspace/demo_salvage_out/corrupt-cell/out-1，请依据诊断人工核对
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 2（0.17s）
+  [PASS] corrupt-cell: 单条记录隔离
+
+### 溢出链破坏（大正文 8026e5c96cf1…，事件 evt-special-big0，首溢出页 549）
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/corrupt-overflow-cut/damaged.db --out /workspace/demo_salvage_out/corrupt-overflow-cut/out-1
+    源镜像: /workspace/demo_salvage_out/corrupt-overflow-cut/damaged.db（页长 512，共 687 页，sha256 8c5c7471ba6f3664…）
+    事件: 已确认 247，被隔离 0；正文: 已验证 248，未验证 0，被隔离 0，未关联 2
+    诊断: info 2 / warning 1 / error 1 -> /workspace/demo_salvage_out/corrupt-overflow-cut/out-1/diagnostics.jsonl
+    退出码 2：部分结果已保留在 /workspace/demo_salvage_out/corrupt-overflow-cut/out-1，请依据诊断人工核对
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 2（0.17s）
+  [PASS] corrupt-overflow-cut: 有界结束（0.17s）且未验证
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/corrupt-overflow-cycle/damaged.db --out /workspace/demo_salvage_out/corrupt-overflow-cycle/out-1
+    源镜像: /workspace/demo_salvage_out/corrupt-overflow-cycle/damaged.db（页长 512，共 687 页，sha256 a47cc0e8f0064903…）
+    事件: 已确认 247，被隔离 0；正文: 已验证 248，未验证 0，被隔离 0，未关联 2
+    诊断: info 2 / warning 1 / error 1 -> /workspace/demo_salvage_out/corrupt-overflow-cycle/out-1/diagnostics.jsonl
+    退出码 2：部分结果已保留在 /workspace/demo_salvage_out/corrupt-overflow-cycle/out-1，请依据诊断人工核对
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 2（0.16s）
+  [PASS] corrupt-overflow-cycle: 有界结束（0.16s）且未验证
+
+### 破坏：溢出链与表树共享同一页
+  溢出链下一指针改为表树叶页 24（4 条事件应被隔离）
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/corrupt-shared-page/damaged.db --out /workspace/demo_salvage_out/corrupt-shared-page/out-1
+    源镜像: /workspace/demo_salvage_out/corrupt-shared-page/damaged.db（页长 512，共 687 页，sha256 9bd041f4e1f536a0…）
+    事件: 已确认 243，被隔离 4；正文: 已验证 248，未验证 0，被隔离 0，未关联 2
+    诊断: info 2 / warning 1 / error 2 -> /workspace/demo_salvage_out/corrupt-shared-page/out-1/diagnostics.jsonl
+    退出码 2：部分结果已保留在 /workspace/demo_salvage_out/corrupt-shared-page/out-1，请依据诊断人工核对
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 2（0.20s）
+  [PASS] corrupt-shared-page: 歧义占用双方隔离
+
+### 破坏：目录（第 1 页类型字节）
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/corrupt-catalog/damaged.db --out /workspace/demo_salvage_out/corrupt-catalog/out-1
+    [stderr] 提取被拒绝：目录无法完整解释（bad_page_type）：{'tree': 'sqlite_schema', 'page': 1, 'path': (1,), 'detail': {'type_byte': 0, 'expected': '5(内部)/13(叶子)'}}
+    -> 退出码 1（0.03s）
+  [PASS] corrupt-catalog: 整体拒绝（退出码 1）
+
+### 破坏：目录中目标表布局不符
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/corrupt-layout/damaged.db --out /workspace/demo_salvage_out/corrupt-layout/out-1
+    [stderr] 提取被拒绝：表 accepted_events 布局不符：期望列 ['event_id', 'partner_id', 'source_seq', 'key_version', 'body_sha256', 'ingest_record_id', 'claimed_timestamp', 'accepted_at']，目录中为 ['event_XX', 'partner_id', 'source_seq', 'key_version', 'body_sha256', 'ingest_record_id', 'claimed_timestamp', 'accepted_at']
+    -> 退出码 1（0.04s）
+  [PASS] corrupt-layout: 整体拒绝（退出码 1）
+
+### 破坏：文件截短（保留前 60% 页）
+  总页数 687，保留 412 页
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/truncated/damaged.db --out /workspace/demo_salvage_out/truncated/out-1
+    源镜像: /workspace/demo_salvage_out/truncated/damaged.db（页长 512，共 412 页，sha256 83b7ea8375e5531b…）
+    事件: 已确认 179，被隔离 0；正文: 已验证 182，未验证 0，被隔离 0，未关联 4
+    诊断: info 4 / warning 2 / error 36 -> /workspace/demo_salvage_out/truncated/out-1/diagnostics.jsonl
+    退出码 2：部分结果已保留在 /workspace/demo_salvage_out/truncated/out-1，请依据诊断人工核对
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 2（0.12s）
+  [PASS] truncated: 部分交付（退出码 2）
+
+### 破坏：正文单字节（SHA-256 校验失配）
+  翻转正文 786dbc23a80d… 的 1 字节（文件偏移 13929）
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/corrupt-body-byte/damaged.db --out /workspace/demo_salvage_out/corrupt-body-byte/out-1
+    源镜像: /workspace/demo_salvage_out/corrupt-body-byte/damaged.db（页长 512，共 687 页，sha256 23932621f84979b1…）
+    事件: 已确认 247，被隔离 0；正文: 已验证 248，未验证 1，被隔离 0，未关联 2
+    诊断: info 2 / warning 2 / error 0 -> /workspace/demo_salvage_out/corrupt-body-byte/out-1/diagnostics.jsonl
+    退出码 2：部分结果已保留在 /workspace/demo_salvage_out/corrupt-body-byte/out-1，请依据诊断人工核对
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 2（0.17s）
+  [PASS] corrupt-body-byte: 校验失配被列出
+
+### 拒绝：非空 -wal / -journal 旁文件
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/sidefilewal/damaged.db --out /workspace/demo_salvage_out/sidefilewal/out-1
+    [stderr] 提取被拒绝：存在非空旁文件 /workspace/demo_salvage_out/sidefilewal/damaged.db-wal（16 字节）：WAL/回滚日志尚未归并，镜像状态不确定，拒绝提取
+    -> 退出码 1（0.03s）
+  [PASS] sidefile-wal: 整体拒绝（退出码 1）
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/sidefilejournal/damaged.db --out /workspace/demo_salvage_out/sidefilejournal/out-1
+    [stderr] 提取被拒绝：存在非空旁文件 /workspace/demo_salvage_out/sidefilejournal/damaged.db-journal（16 字节）：WAL/回滚日志尚未归并，镜像状态不确定，拒绝提取
+    -> 退出码 1（0.03s）
+  [PASS] sidefile-journal: 整体拒绝（退出码 1）
+
+### 拒绝：输出目录已存在
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/healthy-512/healthy-512.db --out /workspace/demo_salvage_out/output-exists/out-1
+    [stderr] 提取被拒绝：输出目录已存在，拒绝覆盖：/workspace/demo_salvage_out/output-exists/out-1
+    -> 退出码 1（0.03s）
+  [PASS] output-exists: 整体拒绝（退出码 1）
+
+### 资源上限（退出码 2，留下未完成原因）
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/healthy-512/healthy-512.db --out /workspace/demo_salvage_out/limit-pages/out-1 --max-pages 264
+    源镜像: /workspace/demo_salvage_out/healthy-512/healthy-512.db（页长 512，共 687 页，sha256 1c7a2a7fe93c2ff9…）
+    事件: 已确认 247，被隔离 0；正文: 已验证 245，未验证 0，被隔离 0，未关联 0
+    诊断: info 0 / warning 2 / error 1 -> /workspace/demo_salvage_out/limit-pages/out-1/diagnostics.jsonl
+    未完成原因: page_limit
+    退出码 2：部分结果已保留在 /workspace/demo_salvage_out/limit-pages/out-1，请依据诊断人工核对
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 2（0.16s）
+  [PASS] limit-pages: 访问页数上限（健康遍历需 267 页）
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/healthy-512/healthy-512.db --out /workspace/demo_salvage_out/limit-payload/out-1 --max-payload-bytes 4096
+    源镜像: /workspace/demo_salvage_out/healthy-512/healthy-512.db（页长 512，共 687 页，sha256 1c7a2a7fe93c2ff9…）
+    事件: 已确认 247，被隔离 0；正文: 已验证 247，未验证 0，被隔离 0，未关联 2
+    诊断: info 2 / warning 2 / error 2 -> /workspace/demo_salvage_out/limit-payload/out-1/diagnostics.jsonl
+    未完成原因: payload_limit
+    退出码 2：部分结果已保留在 /workspace/demo_salvage_out/limit-payload/out-1，请依据诊断人工核对
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 2（0.17s）
+  [PASS] limit-payload: 单条载荷上限
+  $ /usr/bin/python3 -I /workspace/partner_webhook/salvage.py --db /workspace/demo_salvage_out/limit-diagnostics/damaged.db --out /workspace/demo_salvage_out/limit-diagnostics/out-1 --max-diagnostics 3
+    源镜像: /workspace/demo_salvage_out/limit-diagnostics/damaged.db（页长 512，共 687 页，sha256 49b046e5c5273333…）
+    事件: 已确认 224，被隔离 0；正文: 已验证 249，未验证 0，被隔离 0，未关联 25
+    诊断: info 0 / warning 0 / error 4 -> /workspace/demo_salvage_out/limit-diagnostics/out-1/diagnostics.jsonl
+    未完成原因: diagnostics_limit
+    退出码 2：部分结果已保留在 /workspace/demo_salvage_out/limit-diagnostics/out-1，请依据诊断人工核对
+    证据边界: 本输出仅表示本次从数据库镜像中按 SQLite 文件结构解码得到的内容；正文的 SHA-256 校验仅证明提取字节与 raw_bodies 登记的摘要一致，不证明原始投递签名有效，也不证明当时的接收判定正确；全部结果需人工核对后方可重新导入。本工具只读源文件，不修复、不清空源库，也不回写在线接收或 outbox。
+    -> 退出码 2（0.25s）
+  [PASS] limit-diagnostics: 诊断条数上限
+
+========================================================================
+验收场景 18 项，失败 0 项
+  [PASS] healthy-512: 完整提取且与 SQL 参照一致
+  [PASS] healthy-4096: 完整提取且与 SQL 参照一致
+  [PASS] healthy-65536: 完整提取且与 SQL 参照一致
+  [PASS] corrupt-leaf: 坏页隔离、其余保留
+  [PASS] corrupt-cell: 单条记录隔离
+  [PASS] corrupt-overflow-cut: 有界结束（0.17s）且未验证
+  [PASS] corrupt-overflow-cycle: 有界结束（0.16s）且未验证
+  [PASS] corrupt-shared-page: 歧义占用双方隔离
+  [PASS] corrupt-catalog: 整体拒绝（退出码 1）
+  [PASS] corrupt-layout: 整体拒绝（退出码 1）
+  [PASS] truncated: 部分交付（退出码 2）
+  [PASS] corrupt-body-byte: 校验失配被列出
+  [PASS] sidefile-wal: 整体拒绝（退出码 1）
+  [PASS] sidefile-journal: 整体拒绝（退出码 1）
+  [PASS] output-exists: 整体拒绝（退出码 1）
+  [PASS] limit-pages: 访问页数上限（健康遍历需 267 页）
+  [PASS] limit-payload: 单条载荷上限
+  [PASS] limit-diagnostics: 诊断条数上限
+全部通过。输出保留在: /workspace/demo_salvage_out
+
+>>> 提取器单命令用法（可直接运行）：
+      python3 -I /workspace/partner_webhook/salvage.py --db <镜像.db> --out <新目录> \
+          [--max-payload-bytes N] [--max-pages N] [--max-diagnostics N]
+    退出码：0 完整提取；2 部分结果（损坏/歧义/失配/上限）；1 整体拒绝。
+>>> 验收输出保留在: /workspace/demo_salvage_out

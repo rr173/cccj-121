@@ -1,0 +1,4 @@
+{"seq": 1, "severity": "error", "code": "bad_cell", "tree": "raw_bodies", "page": 542, "path": ["2", "542"], "detail": {"cell_index": 3, "cell_offset": 221, "error": "溢出链在页 549 处成环"}}
+{"seq": 2, "severity": "warning", "code": "event_missing_body", "tree": "accepted_events", "page": 544, "detail": {"rowid": 244, "partner_id": "acme", "event_id": "evt-special-big0", "body_sha256": "8026e5c96cf1e502c8deb3e89f8b8bc342f5039b871911a92eb10edf9c6542d3", "note": "事件引用的正文未能完整解码"}}
+{"seq": 3, "severity": "info", "code": "unassociated_body", "tree": "raw_bodies", "page": 682, "detail": {"rowid": 246, "body_sha256": "0ac23fd7d239e4da9b423c29ef7f8a464f580530054974465a8714929131b2f8", "note": "没有事件引用该正文（可能来自拒收或冲突投递），按原样保留，不判为损坏"}}
+{"seq": 4, "severity": "info", "code": "unassociated_body", "tree": "raw_bodies", "page": 682, "detail": {"rowid": 247, "body_sha256": "ee268a71b05de985c2d7b596eede7bb289ad999b071882bc65e653b9c52e58a6", "note": "没有事件引用该正文（可能来自拒收或冲突投递），按原样保留，不判为损坏"}}
