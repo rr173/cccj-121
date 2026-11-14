@@ -174,6 +174,94 @@ python3 -I partner_webhook/cli.py --db webhook.db \
   总数与分页行来自同一只读事务、同一代索引。合作方筛选必填。
 
 
+### 8. 设备档案加工管线（`docarchive.py` / `jsonpatch.py`，乱序 JSON Patch 还原）
+
+合作方有时只发送档案改动的几个位置而不重发整份档案。本管线在**独立的
+SQLite 加工库**里把乱序到达的 `seed` / `patch` 事件还原成设备当前档案，
+不使用正文搜索索引保存加工状态，也不改变签名收件与坏库提取的行为。
+
+#### 来件约定（同一合作方内 `document_id` 标识一份档案，合作方间可重号）
+
+正文为 UTF-8 JSON 对象，只用严格解析器解释（重复键/NaN/截断一律拒绝）：
+
+- `kind=seed`：含 `document_id`、`revision=0`、`document`（任意 JSON 值）；
+- `kind=patch`：含 `document_id`、`base_revision`、`revision`、`operations`；
+  修订号为**规范非负整数字面量且不是布尔值**（拒绝 `01`、`1.0`、`true`），
+  且 `revision == base_revision + 1`，`operations` 是 JSON Patch 操作数组；
+- 其他 `kind` 或非对象正文登记为**非档案来件**；约定字段缺失、多余、重复
+  键、类型错误都**指明所在事件**，原因落库，不做任何强制转型。
+
+加工库保留源合作方、事件 ID、正文 SHA-256/长度与正文摘要（预览），源
+`accepted_events` 只读；加工状态不借用也不标记原 outbox。
+
+#### RFC 6902 / 6901 语义（`jsonpatch.py`）
+
+- 支持 `add`/`remove`/`replace`/`move`/`copy`/`test` 六种操作，顺序有意义；
+- JSON Pointer：空串指根，`~1`→`/`、`~0`→`~`，未知转义拒绝；对象空键、
+  数字键、带斜杠键都按原名访问；数组只接受规范非负十进制下标（拒绝
+  `01`/负数/越界），`-` 仅供 `add` 到末尾，不能作读取位置；
+- `add` 父节点必须已存在（可替换对象成员、插入数组元素）；`replace`/
+  `remove` 必须找到目标；`copy` 复制独立树，改副本不影响原值；`move` 先
+  取出再删除、按删除后的档案定位插入点，不能移进自己的后代；
+- `test` 按结构与值比较：对象成员顺序无关、数组顺序有关、布尔≠数字、
+  `1`==`1.0`，有限十进制数字保留原文不经过 float；
+- `remove` 根产生“本修订没有档案”（`absent`）状态，后续只有根 `add` 能
+  重新建档——这与档案内容为 JSON `null`（仍是 `present`）不同；
+- **原子性**：每次 patch 先深拷贝工作副本再逐条应用，任一操作失败即整体
+  丢弃、指出第几个操作及失败位置，调用方原档案不留下半改对象；失败事件
+  仍保留查账，并阻断其后续修订（不能跳过接下一版）。
+
+#### 乱序、分支与人工选择（`docarchive.py`）
+
+- seed 与 patch 可乱序到达；缺 seed 或缺前一版的修改先标记**等待前版**，
+  补齐后沿修订链接执行；
+- 两个不同源事件声明同一档案同一修订（哪怕操作一样）即**分支**，不按到达
+  时间或 event_id 自动选。无人工选择时只公布从唯一 seed 出发、每一跳均无
+  分支且执行成功的**最长前缀**：已到第 2 版后又收到另一条 0→1，公布退回
+  第 0 版，原第 2 版仍在账上但被含糊的第 1 版阻断；两个 seed 同样视为
+  分支，未选择前不公布内容；
+- 提供持久化的本地选择/撤销：按合作方、档案、修订号指定采用的源事件 ID
+  （seed 也可选）。选择必须存在且属于该坐标，错误选择不改任何状态；选择
+  后立即重算，已明确选择的修订后来再出现竞争分支仍尊重原选择，同时保留
+  新分支“未被选中”的诊断；撤销后恢复无偏好分支判定。不生成伪造来件、不
+  删除竞争事件；所有操作只影响本合作方的对应档案。
+
+每条来件的处置可解释为：已采用 / 等待前版 / 分支未选 / 未被选中 /
+操作失败 / 被前方阻断 / 非档案来件 / 约定不符，并能沿当前内容查回采用过
+的事件链。
+
+#### 持久化与命令
+
+```bash
+# 从接收库（只读）导入新来件并重算（加工库独立，重复同步是无操作）
+python3 -I partner_webhook/cli.py --db webhook.db \
+  archive-sync --archive-db archive.db
+# 查看当前公布档案（含 state：present/absent/none 与采用事件链）
+python3 -I partner_webhook/cli.py --db webhook.db \
+  archive-document --archive-db archive.db --partner acme --document-id dev-9
+# 查看来件处置与原因（可按合作方/档案过滤）
+python3 -I partner_webhook/cli.py --db webhook.db \
+  archive-dispositions --archive-db archive.db [--partner acme] [--document-id dev-9]
+# 查看一份档案的修订候选、分支与人工选择
+python3 -I partner_webhook/cli.py --db webhook.db \
+  archive-revisions --archive-db archive.db --partner acme --document-id dev-9
+# 人工选择 / 撤销（错误选择退出码 2 且不改状态）
+python3 -I partner_webhook/cli.py --db webhook.db \
+  archive-select   --archive-db archive.db --partner acme --document-id dev-9 \
+                   --revision 1 --event-id p1
+python3 -I partner_webhook/cli.py --db webhook.db \
+  archive-deselect --archive-db archive.db --partner acme --document-id dev-9 --revision 1
+```
+
+- 每次同步在源库一个只读读事务里取来件快照；加工侧的导入登记、当前档案
+  与处置结论在**同一个写事务**共同提交，当前内容的读取看不到“版本已升而
+  内容还没改”的中间状态；进程在写入新档案后、提交前真正退出，重开仍是旧
+  结果，重新同步即可继续（`--simulate-crash-before-commit` 可演练）；
+- 不要求保留每份完整历史档案，不自动修复或回发源数据。
+- 验收演示（真实签名收件 → CLI 加工/读回，115 项断言，含手写小例子）：
+  `python3 -I scripts/archive_acceptance.py`；一键演示：`bash demo_archive.sh`。
+
+
 #### 索引生命周期
 
 - 索引库与接收库分离；同步只以 `mode=ro` + `query_only` 打开源库，**同步
@@ -204,6 +292,8 @@ partner_webhook/
   cli.py         命令行入口（在线收件、查询与索引命令）
   salvage.py     离线接收库提取器（直接解释 SQLite 文件页，不经过 SQL 引擎）
   strictjson.py  严格 UTF-8 JSON 解析（拒绝重复键/NaN/截断，数字精确保留）
+  jsonpatch.py   RFC 6901 JSON Pointer 与 RFC 6902 JSON Patch 解释器（原子、精确数字）
+  docarchive.py  设备档案加工管线（独立 SQLite 加工库、乱序/分支/人工选择）
   indexstore.py  持久正文索引（路径 + 类型 + 数组实例，代际发布）
   query.py       有限 JSON 表达式校验、SQL 编译与分页查询
   direct_eval.py 小样本独立核对器（直接解释 JSON 树，不走索引 SQL）
@@ -213,9 +303,12 @@ config.example.json
 tests/           自动化测试
 scripts/salvage_acceptance.py   提取器验收材料（真实建库/破坏/独立核对，可复跑）
 scripts/index_acceptance.py     正文索引验收材料（真实收件/同步/查询/独立核对）
+scripts/archive_acceptance.py   档案加工验收材料（真实收件/乱序/分支/选择/崩溃恢复）
+scripts/archive_examples.py     档案加工手写小例子（期望不来自正式加工函数）
 demo.sh          在线收件端到端演示（本地环回，不连外网）
 demo_salvage.sh  提取器验收演示（真实破坏与退出码矩阵）
 demo_index.sh    正文索引验收演示（反例、跨元素、同步增删改、崩溃恢复）
+demo_archive.sh  档案加工验收演示（乱序等待、分支退回、人工选择、跨方拒绝）
 ```
 
 ## 快速开始
@@ -253,6 +346,11 @@ python3 -I partner_webhook/cli.py send \
 | `index-sync` | 从接收库（只读）同步本地 JSON 正文索引，发布新一代 |
 | `index-status` | 查看当前索引代、事件状态与跳过原因 |
 | `index-query` | 用 JSON 表达式查询索引，必填 `--partner` |
+| `archive-sync` | 从接收库（只读）导入 seed/patch 并重算档案版本（独立加工库） |
+| `archive-document` | 查看一份档案的当前公布内容、状态与采用事件链 |
+| `archive-dispositions` | 查看每条来件的处置（等待/分支/失败/阻断等）与原因 |
+| `archive-revisions` | 查看一份档案的修订候选、分支与人工选择 |
+| `archive-select` / `archive-deselect` | 按坐标人工选择/撤销采用的源事件 |
 
 离线抢救（独立于上表，不经过在线入口）：
 
@@ -303,6 +401,17 @@ python3 -I -m unittest discover -s tests -t . -v
 正文索引验收材料可复跑：`python3 -I scripts/index_acceptance.py`（100 项
 断言，含逐表达式与直接 JSON 解释器的交叉核对）。
 
+- 档案加工：RFC 6901 指针（空键/~ 转义/未知转义/对象数字键 vs 数组规范
+  下标/`-` 语义）；六操作、move 删除后定位与禁入后代、copy 独立树、test
+  精确比较（超大整数、布尔≠数字、`1`==`1.0`）；原子回滚不改原对象、根
+  remove 的 absent 与 null 区分；信封缺失/多余/重复键/类型错误不转型；
+  乱序等待、分支退回与最长前缀、人工选择/撤销、两个 seed 冲突、失败阻断
+  后续、合作方隔离、重复同步无操作、重开状态保留、未提交崩溃恢复、源库
+  只读与 outbox 不被借用。
+
+档案加工验收材料可复跑：`python3 -I scripts/archive_acceptance.py`（115 项
+断言，真实签名收件 + 手写小例子独立核对）。
+
 一键演示：`bash demo.sh`（在线收件）；`bash demo_salvage.sh`（离线抢救验收）；
 `bash demo_index.sh`（正文索引验收：反例、组合条件、独立核对、同步增删改与
-崩溃恢复）。
+崩溃恢复）；`bash demo_archive.sh`（档案加工验收：乱序、分支、人工选择）。

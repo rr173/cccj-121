@@ -14,6 +14,12 @@
   index-sync     从接收库（只读）同步本地 JSON 正文索引
   index-status   查看当前已发布索引代与跳过原因
   index-query    用 JSON 表达式在索引上查询（必填合作方）
+  archive-sync   从接收库（只读）导入 seed/patch 来件并重算档案版本
+  archive-document      查看一份档案的当前公布内容与采用事件链
+  archive-dispositions  查看每条来件的处置（等待/分支/失败/阻断等）
+  archive-revisions     查看一份档案的修订处置、分支候选与人工选择
+  archive-select        按合作方/档案/修订号选择要采用的源事件
+  archive-deselect      撤销某修订的人工选择
 """
 
 from __future__ import annotations
@@ -388,6 +394,117 @@ def cmd_index_query(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------- #
+# 设备档案加工管线（独立 SQLite 加工库）
+# --------------------------------------------------------------------- #
+def _print_archive(obj) -> None:
+    from partner_webhook.docarchive import ExactNumber, dumps_plain
+
+    def walk(node):
+        if isinstance(node, ExactNumber):
+            return node
+        if isinstance(node, dict):
+            return {key: walk(item) for key, item in node.items()}
+        if isinstance(node, list):
+            return [walk(item) for item in node]
+        return node
+
+    sys.stdout.write(dumps_plain(walk(obj)))
+    sys.stdout.write("\n")
+
+
+def cmd_archive_sync(args) -> int:
+    from partner_webhook.docarchive import sync_archive
+
+    try:
+        report = sync_archive(
+            source_db=args.db, archive_db=args.archive_db,
+            simulate_crash_before_commit=args.simulate_crash_before_commit,
+        )
+    except Exception as exc:  # 同步失败整体回滚，不输出半份报告
+        print(f"档案同步失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    _print_json(report.as_dict())
+    return 0
+
+
+def cmd_archive_document(args) -> int:
+    from partner_webhook.docarchive import get_current_document
+
+    try:
+        result = get_current_document(args.archive_db, args.partner,
+                                      args.document_id)
+    except Exception as exc:
+        print(f"档案读取失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    _print_archive(result)
+    return 0
+
+
+def cmd_archive_dispositions(args) -> int:
+    from partner_webhook.docarchive import list_dispositions
+
+    try:
+        rows = list_dispositions(args.archive_db,
+                                 partner_id=args.partner,
+                                 document_id=args.document_id)
+    except Exception as exc:
+        print(f"处置读取失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    _print_json(rows)
+    return 0
+
+
+def cmd_archive_revisions(args) -> int:
+    from partner_webhook.docarchive import list_revisions
+
+    try:
+        result = list_revisions(args.archive_db, args.partner, args.document_id)
+    except Exception as exc:
+        print(f"修订读取失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    _print_json(result)
+    return 0
+
+
+def cmd_archive_select(args) -> int:
+    from partner_webhook.docarchive import ArchiveError, select_revision
+
+    try:
+        result = select_revision(
+            archive_db=args.archive_db, partner_id=args.partner,
+            document_id=args.document_id, revision=args.revision,
+            event_id=args.event_id,
+        )
+    except ArchiveError as exc:
+        # 错误选择不改任何状态：退出码 2，原因写 stderr。
+        print(f"选择被拒绝: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"选择失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    _print_json(result)
+    return 0
+
+
+def cmd_archive_deselect(args) -> int:
+    from partner_webhook.docarchive import ArchiveError, deselect_revision
+
+    try:
+        result = deselect_revision(
+            archive_db=args.archive_db, partner_id=args.partner,
+            document_id=args.document_id, revision=args.revision,
+        )
+    except ArchiveError as exc:
+        print(f"撤销被拒绝: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"撤销失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    _print_json(result)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="partner-webhook",
@@ -491,6 +608,50 @@ def build_parser() -> argparse.ArgumentParser:
     p_iquery.add_argument("--limit", type=int, default=100)
     p_iquery.add_argument("--offset", type=int, default=0)
     p_iquery.set_defaults(func=cmd_index_query)
+
+    # ---- 设备档案加工管线（加工库与接收库、正文索引完全分离） ----
+    p_async = sub.add_parser(
+        "archive-sync",
+        help="从接收库（只读）导入 seed/patch 来件并重算档案版本")
+    p_async.add_argument("--archive-db", required=True, help="档案加工库路径")
+    p_async.add_argument("--simulate-crash-before-commit", action="store_true",
+                         help="测试专用：档案已写入但未提交时强制结束进程")
+    p_async.set_defaults(func=cmd_archive_sync)
+
+    p_adoc = sub.add_parser("archive-document", help="查看一份档案的当前公布内容")
+    p_adoc.add_argument("--archive-db", required=True)
+    p_adoc.add_argument("--partner", required=True)
+    p_adoc.add_argument("--document-id", required=True)
+    p_adoc.set_defaults(func=cmd_archive_document)
+
+    p_adisp = sub.add_parser("archive-dispositions", help="查看来件处置与原因")
+    p_adisp.add_argument("--archive-db", required=True)
+    p_adisp.add_argument("--partner", default=None)
+    p_adisp.add_argument("--document-id", default=None)
+    p_adisp.set_defaults(func=cmd_archive_dispositions)
+
+    p_arev = sub.add_parser("archive-revisions",
+                            help="查看一份档案的修订处置、分支与人工选择")
+    p_arev.add_argument("--archive-db", required=True)
+    p_arev.add_argument("--partner", required=True)
+    p_arev.add_argument("--document-id", required=True)
+    p_arev.set_defaults(func=cmd_archive_revisions)
+
+    p_asel = sub.add_parser("archive-select",
+                            help="按合作方/档案/修订号选择要采用的源事件")
+    p_asel.add_argument("--archive-db", required=True)
+    p_asel.add_argument("--partner", required=True)
+    p_asel.add_argument("--document-id", required=True)
+    p_asel.add_argument("--revision", type=int, required=True)
+    p_asel.add_argument("--event-id", required=True)
+    p_asel.set_defaults(func=cmd_archive_select)
+
+    p_adesel = sub.add_parser("archive-deselect", help="撤销某修订的人工选择")
+    p_adesel.add_argument("--archive-db", required=True)
+    p_adesel.add_argument("--partner", required=True)
+    p_adesel.add_argument("--document-id", required=True)
+    p_adesel.add_argument("--revision", type=int, required=True)
+    p_adesel.set_defaults(func=cmd_archive_deselect)
     return parser
 
 
