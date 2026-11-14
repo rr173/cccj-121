@@ -1,0 +1,35 @@
+{
+  "max_skew_seconds": 300,
+  "partners": [
+    {
+      "id": "acme",
+      "max_skew_seconds": 300,
+      "keys": [
+        {
+          "version": "v1",
+          "secret_b64": "b2xkLWFjbWUtc2VjcmV0LWtleS0wMDE=",
+          "not_before": "2026-01-01T00:00:00Z",
+          "not_after": "2026-12-31T23:59:59Z"
+        },
+        {
+          "version": "v2",
+          "secret_b64": "bmV3LWFjbWUtc2VjcmV0LWtleS0wMDI=",
+          "not_before": "2026-11-01T00:00:00Z",
+          "not_after": "2027-12-31T23:59:59Z"
+        }
+      ]
+    },
+    {
+      "id": "globex",
+      "max_skew_seconds": 120,
+      "keys": [
+        {
+          "version": "g1",
+          "secret_b64": "Z2xvYmV4LW9ubHkta2V5LWcwMQ==",
+          "not_before": null,
+          "not_after": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "partner-webhook"
+version = "1.0.0"
+description = "离线合作方事件 Webhook 接入服务（HMAC 验证、密钥轮换、SQLite 持久化）"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+partner-webhook = "partner_webhook.cli:main"
+
+[tool.setuptools]
+packages = ["partner_webhook"]
+
+[tool.setuptools.package-data]
+partner_webhook = ["migrations/*.sql"]
