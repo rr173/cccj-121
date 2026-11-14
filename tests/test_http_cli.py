@@ -154,19 +154,19 @@ class CliTest(WebhookTestCase):
         self.assertEqual(stats["ingest"][REJECTED], 1)
         self.assertEqual(stats["accepted_events"], 1)
 
-    def test_drain_outbox_marks_delivered_in_sequence_order(self):
+    def test_drain_outbox_is_disabled_and_does_not_fake_success(self):
         self.deliver(self.service, event_id="evt-30", sequence=30)
         self.deliver(self.service, event_id="evt-20", sequence=20)
-        out = self._run_cli("drain-outbox")
-        report = json.loads(out)
-        self.assertEqual(report["count"], 3)
-        # 按源序号顺序下发
-        self.assertEqual([d["source_seq"] for d in report["delivered"]],
-                         [10, 20, 30])
-        self.assertEqual(self.storage.pending_outbox(), [])
-        # 再次执行没有待处理项
-        again = json.loads(self._run_cli("drain-outbox"))
-        self.assertEqual(again["count"], 0)
+        before = len(self.storage.pending_outbox())
+        self.assertGreater(before, 0)
+        # 旧入口已停用：退出码 2，明确提示新命令，且不改变任何状态
+        buf, err = io.StringIO(), io.StringIO()
+        from contextlib import redirect_stderr
+        with redirect_stdout(buf), redirect_stderr(err):
+            code = cli.main(self._args("drain-outbox"))
+        self.assertEqual(code, 2)
+        self.assertIn("outbox-run", err.getvalue())
+        self.assertEqual(len(self.storage.pending_outbox()), before)
 
 
 class CliReplayTest(WebhookTestCase):

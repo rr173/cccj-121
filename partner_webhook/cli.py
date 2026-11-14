@@ -9,7 +9,12 @@
   record         查看单条接收记录
   body           按记录导出可重放的原始字节体
   replay-event   用保存的原始体与头重新投递（支持模拟时间）
-  drain-outbox   把待投递 outbox 标记为已投递（下游占位实现）
+  outbox-endpoint   登记/查看合作方固定接收地址（登记后不可原地更换）
+  outbox-run        向已登记接收地址发送一轮 outbox（真实 HTTP，至少一次）
+  outbox-queue      查看某合作方的投递队列与队首状态
+  outbox-attempts   查看某事件的逐次尝试、人工重试与迟到回执记录
+  outbox-retry      人工重试某永久失败事件（重新开始该轮退避计数）
+  drain-outbox      已停用：旧入口会在未经远端确认时虚报成功，请用 outbox-run
   stats          汇总统计
   index-sync     从接收库（只读）同步本地 JSON 正文索引
   index-status   查看当前已发布索引代与跳过原因
@@ -276,25 +281,152 @@ def cmd_replay(args) -> int:
 
 
 def cmd_drain(args) -> int:
-    _, storage = _build_service(args)
+    """旧入口已停用：不得在未经远端确认时把积压标成 delivered。"""
+    print(
+        "drain-outbox 已停用：旧实现只改本地状态、不向远端发送，会虚报成功。\n"
+        "请改用新入口：\n"
+        "  1) partner-webhook outbox-endpoint --partner <合作方> --register <URL>\n"
+        "  2) partner-webhook outbox-run --partner <合作方>\n"
+        "  3) partner-webhook outbox-queue / outbox-attempts 查看结果\n"
+        "  4) partner-webhook outbox-retry 人工重试永久失败事件",
+        file=sys.stderr,
+    )
+    return 2
+
+
+# --------------------------------------------------------------------- #
+# 下游 HTTP 投递（真实发送工人）
+# --------------------------------------------------------------------- #
+def _delivery_clock(now: int | None):
+    if now is None:
+        return None
+    return lambda: float(now)
+
+
+def _open_delivery(args):
+    """打开会执行迁移的 Storage（确保投递表存在），再建投递存储。"""
+    from partner_webhook.outbound import DeliveryError, DeliveryWorker
+
+    # Storage 构造函数执行迁移；随后关闭其连接，投递工人用自己的连接。
+    storage = Storage(args.db)
+    storage.close()
     try:
-        delivered = []
-        while True:
-            pending = storage.pending_outbox(limit=args.batch)
-            if not pending:
-                break
-            now = int(time.time())
-            for item in pending:
-                # 下游占位：真实部署时在此处把 body 投递给下游系统。
-                # 按 source_seq 排序取出，乱序接收也能按源序号顺序下发。
-                storage.mark_delivered(item["id"], now)
-                delivered.append({"id": item["id"],
-                                  "partner_id": item["partner_id"],
-                                  "event_id": item["event_id"],
-                                  "source_seq": item["source_seq"]})
-        _print_json({"delivered": delivered, "count": len(delivered)})
+        return DeliveryWorker(
+            args.db, clock=_delivery_clock(args.now),
+            timeout=args.timeout, lease_seconds=args.lease_seconds,
+            worker_id=args.worker_id,
+        )
+    except DeliveryError as exc:
+        print(f"投递存储不可用: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+
+def cmd_outbox_endpoint(args) -> int:
+    from partner_webhook.outbound import DeliveryError, DeliveryStore, validate_endpoint_url
+
+    storage = Storage(args.db)
+    storage.close()
+    store = DeliveryStore(args.db)
+    try:
+        if args.register:
+            now = args.now if args.now is not None else int(time.time())
+            result = store.register_endpoint(args.partner, args.register, now)
+            _print_json(result)
+        elif args.list:
+            endpoint = store.endpoint(args.partner)
+            if endpoint is None:
+                print(f"合作方 {args.partner} 尚未登记接收地址", file=sys.stderr)
+                return 1
+            _print_json(endpoint)
+        else:
+            print("请用 --register <URL> 或 --list", file=sys.stderr)
+            return 2
+    except DeliveryError as exc:
+        print(f"接收地址操作被拒绝: {exc}", file=sys.stderr)
+        return 2
     finally:
-        storage.close()
+        store.close()
+    return 0
+
+
+def cmd_outbox_run(args) -> int:
+    from partner_webhook.outbound import DeliveryError
+
+    worker = _open_delivery(args)
+    try:
+        partners = [args.partner] if args.partner else worker.store.known_partners()
+        if not partners:
+            _print_json({"worker_id": worker.worker_id, "now": worker.now(),
+                         "reports": []})
+            print("没有未送达的 outbox 记录", file=sys.stderr)
+            return 0
+        reports = [worker.run_partner(p, max_attempts=args.max_attempts).as_dict()
+                   for p in partners]
+        _print_json({"worker_id": worker.worker_id,
+                     "now": worker.now(), "reports": reports})
+        return 0
+    except DeliveryError as exc:
+        print(f"投递运行失败: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        worker.close()
+
+
+def cmd_outbox_queue(args) -> int:
+    from partner_webhook.outbound import DeliveryError, DeliveryStore
+
+    storage = Storage(args.db)
+    storage.close()
+    store = DeliveryStore(args.db)
+    try:
+        endpoint = store.endpoint(args.partner)
+        rows = store.partner_queue(args.partner, limit=args.limit,
+                                   now=args.now)
+        _print_json({"partner_id": args.partner,
+                     "endpoint": endpoint, "queue": rows})
+    except DeliveryError as exc:
+        print(f"队列读取失败: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+    return 0
+
+
+def cmd_outbox_attempts(args) -> int:
+    from partner_webhook.outbound import DeliveryError, DeliveryStore
+
+    storage = Storage(args.db)
+    storage.close()
+    store = DeliveryStore(args.db)
+    try:
+        result = store.event_attempts(args.partner, args.event_id)
+        _print_json(result)
+    except DeliveryError as exc:
+        print(f"尝试记录读取失败: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+    return 0
+
+
+def cmd_outbox_retry(args) -> int:
+    from partner_webhook.outbound import DeliveryError, DeliveryStore
+
+    storage = Storage(args.db)
+    storage.close()
+    store = DeliveryStore(args.db)
+    try:
+        result = store.retry_permanent(
+            args.partner, args.event_id,
+            args.now if args.now is not None else int(time.time()),
+            operator=args.operator,
+        )
+        _print_json(result)
+    except DeliveryError as exc:
+        print(f"人工重试被拒绝: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        store.close()
     return 0
 
 
@@ -582,9 +714,54 @@ def build_parser() -> argparse.ArgumentParser:
     p_replay.add_argument("--path", default=DEFAULT_PATH)
     p_replay.set_defaults(func=cmd_replay)
 
-    p_drain = sub.add_parser("drain-outbox", help="投递并清空待处理 outbox")
-    p_drain.add_argument("--batch", type=int, default=100)
+    p_drain = sub.add_parser("drain-outbox",
+                             help="已停用（不向远端发送，会虚报成功；请用 outbox-run）")
+    p_drain.add_argument("--batch", type=int, default=100,
+                         help="已停用，参数仅为兼容而保留")
     p_drain.set_defaults(func=cmd_drain)
+
+    p_ep = sub.add_parser("outbox-endpoint",
+                          help="登记/查看合作方固定接收地址（不可原地更换）")
+    p_ep.add_argument("--partner", required=True)
+    p_ep.add_argument("--register", default=None, help="登记接收地址 URL")
+    p_ep.add_argument("--list", action="store_true", help="查看已登记地址")
+    p_ep.add_argument("--now", type=int, default=None,
+                      help="显式当前 Unix 秒（测试用）")
+    p_ep.set_defaults(func=cmd_outbox_endpoint)
+
+    p_run = sub.add_parser("outbox-run", help="向已登记地址发送一轮 outbox")
+    p_run.add_argument("--partner", default=None,
+                       help="只处理该合作方；省略则处理所有有积压的合作方")
+    p_run.add_argument("--max-attempts", type=int, default=20,
+                       help="本轮该合作方的最大网络尝试数")
+    p_run.add_argument("--timeout", type=float, default=10.0,
+                       help="单请求超时秒数")
+    p_run.add_argument("--lease-seconds", type=int, default=60,
+                       help="持久占用到期秒数")
+    p_run.add_argument("--worker-id", default=None,
+                       help="工人标识（默认进程+随机）；两个进程可并发运行")
+    p_run.add_argument("--now", type=int, default=None,
+                       help="显式当前 Unix 秒（测试退避/占用用）")
+    p_run.set_defaults(func=cmd_outbox_run)
+
+    p_oq = sub.add_parser("outbox-queue", help="查看某合作方投递队列与队首状态")
+    p_oq.add_argument("--partner", required=True)
+    p_oq.add_argument("--limit", type=int, default=100)
+    p_oq.add_argument("--now", type=int, default=None,
+                      help="显式当前 Unix 秒（判断退避/占用是否到期）")
+    p_oq.set_defaults(func=cmd_outbox_queue)
+
+    p_oa = sub.add_parser("outbox-attempts", help="查看某事件的尝试与人工重试记录")
+    p_oa.add_argument("--partner", required=True)
+    p_oa.add_argument("--event-id", required=True)
+    p_oa.set_defaults(func=cmd_outbox_attempts)
+
+    p_or = sub.add_parser("outbox-retry", help="人工重试永久失败事件")
+    p_or.add_argument("--partner", required=True)
+    p_or.add_argument("--event-id", required=True)
+    p_or.add_argument("--operator", default=None, help="操作者标识（审计留痕）")
+    p_or.add_argument("--now", type=int, default=None)
+    p_or.set_defaults(func=cmd_outbox_retry)
 
     sub.add_parser("stats", help="汇总统计").set_defaults(func=cmd_stats)
 

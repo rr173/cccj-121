@@ -20,6 +20,7 @@ from partner_webhook import salvage
 from tests.helpers import WebhookTestCase, b64
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# 只建 0001 的表：抢救目标固定是这些表，后续迁移（投递表等）不参与。
 MIGRATION_SQL = (REPO_ROOT / "migrations" / "0001_init.sql").read_text(
     encoding="utf-8")
 

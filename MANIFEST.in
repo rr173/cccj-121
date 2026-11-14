@@ -8,3 +8,4 @@ include demo.sh
 include demo_salvage.sh
 include demo_index.sh
 include demo_archive.sh
+include demo_outbound.sh

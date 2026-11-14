@@ -382,16 +382,17 @@ class RestartConsistencyTest(WebhookTestCase):
         self.reopen_service()  # 再跑一次迁移
         self.reopen_service()
         version = self.storage.conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 1)
-        # 表都还在且数据未损坏
+        self.assertEqual(version, 2)
+        # 表都还在且数据未损坏（含投递状态表）
         tables = {
             r[0] for r in self.storage.iter_all(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
         self.assertTrue(
-            {"raw_bodies", "ingest_records",
-             "accepted_events", "outbox"}.issubset(tables)
+            {"raw_bodies", "ingest_records", "accepted_events", "outbox",
+             "delivery_endpoints", "outbox_delivery",
+             "delivery_attempts", "delivery_operator_actions"}.issubset(tables)
         )
 
 

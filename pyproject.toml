@@ -12,6 +12,7 @@ dependencies = []
 [project.scripts]
 partner-webhook = "partner_webhook.cli:main"
 partner-webhook-salvage = "partner_webhook.salvage:main"
+partner-webhook-receiver = "partner_webhook.receiver:main"
 
 [tool.setuptools]
 packages = ["partner_webhook"]

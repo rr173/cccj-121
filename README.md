@@ -67,6 +67,56 @@ sha256=<原始字节体的 SHA-256 十六进制摘要>
 
 迁移按文件名顺序执行、幂等可重复执行，通过 `PRAGMA user_version` 记录版本。
 
+#### 5.1 下游 HTTP 发送工人（`outbound.py`，`migrations/0002_delivery.sql`）
+
+`outbox` 原先的 `drain-outbox` 只把本地状态改成 `delivered`，并不会把事件
+送出去。新的发送工人是**独立进程**，真正向合作方登记的 HTTP 接收地址投递
+`raw_bodies` 的原始字节；它**不重新验证入站签名**，不读取正文索引/档案加工
+库，也不转发入站签名或密钥。
+
+**交付约定**
+
+| 项 | 约定 |
+| --- | --- |
+| 地址 | 每个合作方登记一个固定 URL；登记后**不可原地更换**（表触发器 + 应用层双重拒绝） |
+| 方法/正文 | `POST`，正文就是 `raw_bodies.body_blob` 原始字节（含空体、非 UTF-8） |
+| 请求头 | `X-Partner-Id`、`X-Event-Id`、`X-Source-Seq`、`X-Body-Sha256`、`X-Delivery-Key` |
+| 头值 | 单值可打印 ASCII；含换行/控制字符/非 ASCII 直接拒绝发送（不静默改写） |
+| `delivery_key` | `sha256(长度前缀的 partner/event/摘要)` → `dk1_…`；重试、重开、换进程都相同；跨合作方同号事件不同 |
+| 发送前校验 | 重算长度与 SHA-256；正文缺失或与登记不符 → **本地坏数据故障，绝不出网** |
+
+**回执确认**：仅当 HTTP 状态 2xx **且** UTF-8 JSON 对象回执的
+`delivery_key` 与 `body_sha256` 都恰好等于本次请求值时才算送达（额外字段
+忽略；重复键、空响应、非 JSON、超 64KiB 均判无效回执）。3xx 不跟随跳转，
+按永久失败；其他 4xx 永久失败（429 除外）；网络断开/超时/5xx/429/无效回执
+可重试。
+
+**退避**：第 n 次失败后等待 `min(60, 2**(n-1))` 秒（n 从 1 计）；429 带
+**仅十进制数字**的 `Retry-After` 时取较大值，否则用默认值。
+
+**排队与占用**
+
+- 按合作方分别排队，队首 = 该合作方最小 `outbox.id` 且未送达的事件；队首
+  退避/被占用/永久失败时后续事件**不得超车**，其他合作方不受影响。
+- 永久失败必须操作者明确 `outbox-retry` 后才能再发；此前尝试全部保留，人工
+  重试重置该轮退避计数。
+- 领取用 `BEGIN IMMEDIATE` 短事务落库，写入一次性 `lease_token` 与到期时间；
+  **网络请求期间不持有数据库写锁**。占用过期后其他工人可接手，旧工人的迟到
+  回执只写 `late_*` 字段，绝不覆盖新结果、不放开队列、不重复完成。
+- 只承诺**至少一次**发送：过期请求无法撤回，接收方可能收到重复，用稳定的
+  `delivery_key` 支持远端去重。
+- 一轮运行有显式 `--max-attempts` 与单请求 `--timeout`；将来才到期的队首
+  不等待、不忙循环，直接报告 `deferred_head`（`blocked_by`/`wait_seconds`）。
+- `--now` 可注入当前时刻（退避/占用到期测试），正常运行默认真实时间。
+
+**新增表**：`delivery_endpoints`（固定地址）、`outbox_delivery`（队首状态与
+占用）、`delivery_attempts`（逐次尝试，含状态码/原因/时间/迟到回执）、
+`delivery_operator_actions`（人工动作审计）。既有收件表与历史
+`outbox.status='delivered'` 记录不受影响（后者没有状态行，不会被重发）。
+
+旧 `drain-outbox` 已**停用**：退出码 2 并提示改用 `outbox-endpoint` /
+`outbox-run` / `outbox-queue` / `outbox-attempts` / `outbox-retry`。
+
 ### 6. 离线接收库提取器（`partner_webhook/salvage.py`，损坏镜像抢救）
 
 备份介质出现坏页时，SQLite 查询读到损坏位置会整次失败，其他页上完好的
@@ -297,7 +347,10 @@ partner_webhook/
   indexstore.py  持久正文索引（路径 + 类型 + 数组实例，代际发布）
   query.py       有限 JSON 表达式校验、SQL 编译与分页查询
   direct_eval.py 小样本独立核对器（直接解释 JSON 树，不走索引 SQL）
+  outbound.py    下游 HTTP 发送工人（按合作方队首、持久占用、逐次尝试）
+  receiver.py    可控下游接收器（本机环回，保存字节/头部/落地键）
 migrations/0001_init.sql
+migrations/0002_delivery.sql  下游投递：接收地址、投递状态/占用、逐次尝试、人工动作
 partner_webhook/migrations/   同一迁移的包内副本（打包安装时随包分发，需与上者保持同步）
 config.example.json
 tests/           自动化测试
@@ -305,10 +358,12 @@ scripts/salvage_acceptance.py   提取器验收材料（真实建库/破坏/独�
 scripts/index_acceptance.py     正文索引验收材料（真实收件/同步/查询/独立核对）
 scripts/archive_acceptance.py   档案加工验收材料（真实收件/乱序/分支/选择/崩溃恢复）
 scripts/archive_examples.py     档案加工手写小例子（期望不来自正式加工函数）
+scripts/outbound_acceptance.py  下游发送验收（受控接收器、退避、断开、并发接手、迁移前记录）
 demo.sh          在线收件端到端演示（本地环回，不连外网）
 demo_salvage.sh  提取器验收演示（真实破坏与退出码矩阵）
 demo_index.sh    正文索引验收演示（反例、跨元素、同步增删改、崩溃恢复）
 demo_archive.sh  档案加工验收演示（乱序等待、分支退回、人工选择、跨方拒绝）
+demo_outbound.sh 下游发送演示（登记地址、429 退避、永久失败与人工重试、逐字节核对）
 ```
 
 ## 快速开始
@@ -341,7 +396,13 @@ python3 -I partner_webhook/cli.py send \
 | `record <id>` | 查看单条接收记录（含完整请求头） |
 | `body <id>` | 导出记录保存的可重放原始字节体 |
 | `replay-event <id>` | 用保存的原始体重投（`--key-version` 换密钥、`--refresh-timestamp` 刷新时间戳、`--now` 模拟时钟） |
-| `drain-outbox` | 按源序号顺序投递 outbox（下游占位实现） |
+| `outbox-endpoint --partner P --register URL` | 登记合作方固定接收地址（不可原地更换） |
+| `outbox-endpoint --partner P --list` | 查看已登记地址 |
+| `outbox-run [--partner P]` | 真实 HTTP 发送一轮（`--max-attempts`、`--timeout`、`--lease-seconds`、`--now`） |
+| `outbox-queue --partner P` | 查看该合作方队列与队首状态 |
+| `outbox-attempts --partner P --event-id E` | 查看某事件逐次尝试、人工重试与迟到回执 |
+| `outbox-retry --partner P --event-id E` | 人工重试永久失败事件（重置该轮退避计数） |
+| `drain-outbox` | **已停用**（退出码 2；不会在未确认时虚报成功，请用 `outbox-run`） |
 | `stats` | 接收/投递汇总统计 |
 | `index-sync` | 从接收库（只读）同步本地 JSON 正文索引，发布新一代 |
 | `index-status` | 查看当前索引代、事件状态与跳过原因 |
@@ -412,6 +473,17 @@ python3 -I -m unittest discover -s tests -t . -v
 档案加工验收材料可复跑：`python3 -I scripts/archive_acceptance.py`（115 项
 断言，真实签名收件 + 手写小例子独立核对）。
 
+- 下游发送：投递契约纯函数（稳定 `delivery_key`/合作方隔离/头值往返/退避
+  公式与 `Retry-After`/回执严格校验/64KiB 上限）；按合作方队首与不超车；
+  429 提前运行零请求、到期同键重送；200 但空体/非 JSON/摘要错/重复键/超大
+  均不算送达；主动断开后同键重试只产生一份业务记录；永久失败需人工重试并
+  保留历史；两进程并发占用不抢、过期接手、旧回执迟到不覆盖；已送达不重发、
+  正文失配不出网、旧 `drain-outbox` 停用。
+
+  下游发送验收材料可复跑：`python3 -I scripts/outbound_acceptance.py`
+  （131 项断言，含真实环回、受控接收器、两进程并发与迁移前库）。
+
 一键演示：`bash demo.sh`（在线收件）；`bash demo_salvage.sh`（离线抢救验收）；
 `bash demo_index.sh`（正文索引验收：反例、组合条件、独立核对、同步增删改与
-崩溃恢复）；`bash demo_archive.sh`（档案加工验收：乱序、分支、人工选择）。
+崩溃恢复）；`bash demo_archive.sh`（档案加工验收：乱序、分支、人工选择）；
+`bash demo_outbound.sh`（下游发送演示：登记地址、429 退避、人工重试、逐字节核对）。
