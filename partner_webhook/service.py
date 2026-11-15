@@ -55,6 +55,7 @@ REJECTION_STATUS = {
 }
 STATUS_CONFLICT = 409
 STATUS_OK = 200
+STATUS_BAD_REQUEST = 400
 
 
 @dataclass
@@ -64,6 +65,19 @@ class ReceiveResult:
     http_status: int
     record_id: int | None = None
     event_id: str | None = None
+
+
+class _LedgerEncodingError(Exception):
+    """已安装账本的合作方提交了账本协议无法编码的事件。
+
+    整个接收事务回滚（不落 ingest_records / accepted_events / outbox），
+    由 HTTP 层映射为 400。
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 Clock = Callable[[], float]
@@ -94,6 +108,9 @@ class WebhookService:
 
         with storage.lock:
             try:
+                # 先取数据库写锁：跨进程串行化，保证「首次接受」判定与账本
+                # 叶序号一致。BEGIN IMMEDIATE 也覆盖随后的全部写入。
+                storage.begin_write()
                 body_sha256 = storage.store_raw_body(body, now)
                 result = self._verify_and_persist(
                     method=method,
@@ -105,6 +122,13 @@ class WebhookService:
                 )
                 storage.commit()
                 return result
+            except _LedgerEncodingError as exc:
+                # 账本协议无法编码：整次拒绝，不留下任何接收或账本记录。
+                storage.rollback()
+                return ReceiveResult(
+                    REJECTED, "ledger_encoding", STATUS_BAD_REQUEST, None,
+                    headers.get(HEADER_EVENT_ID),
+                )
             except Exception:
                 storage.rollback()
                 raise
@@ -241,6 +265,26 @@ class WebhookService:
         })
         # 保留源序号，乱序到达也按 source_seq 排序，绝不误判为重复
         self.storage.enqueue_outbox(
+            partner_id=partner_id, event_id=event_id,
+            source_seq=source_seq, body_sha256=body_sha256, now=now,
+        )
+        # ---- 第 7 步：同事务追加账本叶子（未安装的合作方跳过） ---------
+        # 叶子序号来自 event_logs.tree_size（数据库写锁保护），与 source_seq
+        # 无关；重复投递、同号冲突、拒收都在此之前返回，不会追加叶子。
+        # 已安装的合作方在写叶前先把事件字段校验到可编码范围：超范围时整次
+        # 接收回滚（accepted_events 与账本一同不落），而不是只记一半。
+        installed = self.storage.event_log_installed(partner_id)
+        if installed:
+            from .eventlog import LedgerError, validate_encodable
+
+            try:
+                validate_encodable(partner_id, event_id, source_seq,
+                                   body_sha256)
+            except LedgerError as exc:
+                # 已安装账本的合作方如果提交了账本无法编码的事件，明确拒绝
+                # 整次接收（事件、正文、outbox 都不落），而不是只记一半。
+                raise _LedgerEncodingError(exc.code, exc.message) from None
+        self.storage.append_event_log_leaf(
             partner_id=partner_id, event_id=event_id,
             source_seq=source_seq, body_sha256=body_sha256, now=now,
         )

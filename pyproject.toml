@@ -13,6 +13,7 @@ dependencies = []
 partner-webhook = "partner_webhook.cli:main"
 partner-webhook-salvage = "partner_webhook.salvage:main"
 partner-webhook-receiver = "partner_webhook.receiver:main"
+partner-webhook-verify = "partner_webhook.verifylog:main"
 
 [tool.setuptools]
 packages = ["partner_webhook"]

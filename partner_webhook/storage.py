@@ -33,6 +33,9 @@ def connect(db_path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     # WAL 让查询与写入在重启恢复时更稳，离线单机足够。
     conn.execute("PRAGMA journal_mode = WAL")
+    # 跨进程写锁：两个独立进程同时收件时，后到者等待前者的接收事务结束
+    # （安装/追加账本同样持写锁），而不是拿到不一致的叶序号。
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
@@ -136,6 +139,37 @@ class Storage:
 
     def rollback(self) -> None:
         self.conn.rollback()
+
+    @property
+    def in_transaction(self) -> bool:
+        return self.conn.in_transaction
+
+    def begin_write(self) -> None:
+        """取得数据库写锁（跨进程串行化），立即开始接收事务。"""
+        if not self.conn.in_transaction:
+            self.conn.execute("BEGIN IMMEDIATE")
+
+    # ------------------------------------------------------------------ #
+    # 可验证追加账本（与接收同一事务）
+    # ------------------------------------------------------------------ #
+    def append_event_log_leaf(self, *, partner_id: str, event_id: str,
+                              source_seq: int, body_sha256: str,
+                              now: int) -> dict[str, Any] | None:
+        """首次接受事件时追加一片叶子；合作方未安装账本时返回 None。
+
+        必须在接收事务内调用（由 :meth:`begin_write` 开启）。任何异常都会
+        让整个接收事务回滚，不会留下幽灵叶子或「事件已提交、账本未记」。
+        """
+        from .eventlog import append_leaf
+
+        return append_leaf(self.conn, partner_id=partner_id,
+                           event_id=event_id, source_seq=source_seq,
+                           body_sha256=body_sha256, now=now)
+
+    def event_log_installed(self, partner_id: str) -> bool:
+        from .eventlog import event_log_exists
+
+        return event_log_exists(self.conn, partner_id)
 
     @property
     def lock(self) -> threading.RLock:

@@ -25,6 +25,11 @@
   archive-revisions     查看一份档案的修订处置、分支候选与人工选择
   archive-select        按合作方/档案/修订号选择要采用的源事件
   archive-deselect      撤销某修订的人工选择
+  log-install          为合作方安装可验证追加账本（纳入已有已接受事件）
+  log-status           查看账本当前树长、根与叶数
+  log-checkpoint       读取检查点（可指定旧 tree_size 重建旧前缀根）
+  log-prove-inclusion  为指定检查点下的一条事件生成在账证明
+  log-prove-consistency 为旧/新检查点生成前后追加关系证明
 """
 
 from __future__ import annotations
@@ -440,6 +445,126 @@ def cmd_stats(args) -> int:
 
 
 # --------------------------------------------------------------------- #
+# 可验证追加账本
+# --------------------------------------------------------------------- #
+def _open_ledger(args):
+    from partner_webhook.storage import Storage
+
+    # 打开一次会执行迁移（确保账本表存在）；证明读取使用独立只读连接。
+    storage = Storage(args.db)
+    storage.close()
+
+
+def _write_doc(path: str | None, doc: dict) -> None:
+    from partner_webhook.merkle import dump_document
+
+    text = dump_document(doc)
+    if path:
+        Path(path).write_text(text, encoding="utf-8")
+        print(f"已写入 {path}", file=sys.stderr)
+    else:
+        sys.stdout.write(text)
+
+
+def _ledger_error(exc, code: str = "操作失败") -> int:
+    print(f"{code}: {exc}", file=sys.stderr)
+    return 2
+
+
+def cmd_log_install(args) -> int:
+    from partner_webhook.eventlog import LedgerError, install
+
+    _open_ledger(args)
+    try:
+        result = install(db_path=args.db, partner_id=args.partner)
+    except LedgerError as exc:
+        return _ledger_error(exc, "安装被拒绝")
+    except Exception as exc:
+        return _ledger_error(exc, "安装失败")
+    _print_json(result)
+    return 0
+
+
+def cmd_log_status(args) -> int:
+    from partner_webhook.eventlog import LedgerError, log_status
+
+    _open_ledger(args)
+    try:
+        _print_json(log_status(args.db, args.partner))
+    except LedgerError as exc:
+        return _ledger_error(exc, "账本不可用")
+    except Exception as exc:
+        return _ledger_error(exc, "账本不可用")
+    return 0
+
+
+def cmd_log_checkpoint(args) -> int:
+    from partner_webhook.eventlog import LedgerError, read_checkpoint
+    import partner_webhook.eventlog as eventlog
+
+    _open_ledger(args)
+    trace = eventlog.ReadTrace()
+    try:
+        checkpoint = read_checkpoint(args.db, args.partner,
+                                     tree_size=args.tree_size, trace=trace)
+    except LedgerError as exc:
+        return _ledger_error(exc, "检查点不可用")
+    _write_doc(args.out, checkpoint.as_dict())
+    if args.show_reads:
+        _print_json({"reads": trace.as_dict()})
+    return 0
+
+
+def cmd_log_prove_inclusion(args) -> int:
+    import partner_webhook.eventlog as eventlog
+    from partner_webhook.eventlog import LedgerError, prove_inclusion
+    from partner_webhook.merkle import MerkleError
+
+    _open_ledger(args)
+    trace = eventlog.ReadTrace()
+    try:
+        checkpoint = eventlog.read_checkpoint(
+            args.db, args.partner, tree_size=args.tree_size, trace=trace)
+        proof = prove_inclusion(
+            args.db, args.partner, checkpoint, args.event_id, trace=trace)
+    except (MerkleError, LedgerError) as exc:
+        return _ledger_error(exc, "在账证明不可用")
+    except Exception as exc:
+        return _ledger_error(exc, "在账证明失败")
+    _write_doc(args.out, proof.as_dict())
+    if args.show_reads:
+        _print_json({"reads": trace.as_dict(),
+                     "checkpoint": checkpoint.as_dict()})
+    return 0
+
+
+def cmd_log_prove_consistency(args) -> int:
+    import partner_webhook.eventlog as eventlog
+    from partner_webhook.eventlog import LedgerError, prove_consistency
+    from partner_webhook.merkle import (
+        MerkleError, load_json_document, parse_checkpoint,
+    )
+
+    _open_ledger(args)
+    trace = eventlog.ReadTrace()
+    try:
+        old_doc = load_json_document(args.old_checkpoint, "旧检查点")
+        new_doc = load_json_document(args.new_checkpoint, "新检查点")
+        old = parse_checkpoint(old_doc, "旧检查点")
+        new = parse_checkpoint(new_doc, "新检查点")
+        proof = prove_consistency(args.db, args.partner, old, new,
+                                  trace=trace)
+    except (MerkleError, LedgerError) as exc:
+        return _ledger_error(exc, "一致性证明不可用")
+    except Exception as exc:
+        return _ledger_error(exc, "一致性证明失败")
+    _write_doc(args.out, proof.as_dict())
+    if args.show_reads:
+        _print_json({"reads": trace.as_dict()})
+    return 0
+
+
+# --------------------------------------------------------------------- #
 # 本地 JSON 正文索引
 # --------------------------------------------------------------------- #
 def cmd_index_sync(args) -> int:
@@ -764,6 +889,45 @@ def build_parser() -> argparse.ArgumentParser:
     p_or.set_defaults(func=cmd_outbox_retry)
 
     sub.add_parser("stats", help="汇总统计").set_defaults(func=cmd_stats)
+
+    # ---- 可验证追加账本 ----
+    p_li = sub.add_parser(
+        "log-install", help="为合作方安装/复核可验证追加账本")
+    p_li.add_argument("--partner", required=True)
+    p_li.set_defaults(func=cmd_log_install)
+
+    p_ls = sub.add_parser("log-status", help="查看账本树长、根与叶数")
+    p_ls.add_argument("--partner", default=None,
+                      help="省略时列出所有已安装账本")
+    p_ls.set_defaults(func=cmd_log_status)
+
+    p_lc = sub.add_parser("log-checkpoint", help="读取检查点")
+    p_lc.add_argument("--partner", required=True)
+    p_lc.add_argument("--tree-size", type=int, default=None,
+                      help="旧 tree_size；省略则读取当前检查点")
+    p_lc.add_argument("--out", default=None, help="写入文件（省略输出到 stdout）")
+    p_lc.add_argument("--show-reads", action="store_true",
+                      help="额外输出节点读取计数")
+    p_lc.set_defaults(func=cmd_log_checkpoint)
+
+    p_lpi = sub.add_parser("log-prove-inclusion",
+                           help="为指定检查点下的一条事件生成在账证明")
+    p_lpi.add_argument("--partner", required=True)
+    p_lpi.add_argument("--event-id", required=True)
+    p_lpi.add_argument("--tree-size", type=int, default=None,
+                       help="证明所用的旧 tree_size；省略则用当前树长")
+    p_lpi.add_argument("--out", default=None)
+    p_lpi.add_argument("--show-reads", action="store_true")
+    p_lpi.set_defaults(func=cmd_log_prove_inclusion)
+
+    p_lpc = sub.add_parser(
+        "log-prove-consistency", help="为旧/新检查点生成一致性证明")
+    p_lpc.add_argument("--partner", required=True)
+    p_lpc.add_argument("--old-checkpoint", required=True)
+    p_lpc.add_argument("--new-checkpoint", required=True)
+    p_lpc.add_argument("--out", default=None)
+    p_lpc.add_argument("--show-reads", action="store_true")
+    p_lpc.set_defaults(func=cmd_log_prove_consistency)
 
     p_isync = sub.add_parser("index-sync", help="从接收库同步本地 JSON 正文索引")
     p_isync.add_argument("--index-db", required=True, help="索引库路径（与接收库分离）")

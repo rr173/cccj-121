@@ -66,6 +66,8 @@ sha256=<原始字节体的 SHA-256 十六进制摘要>
 | `outbox` | 下游投递队列，与接收同事务，崩溃后可重投 |
 
 迁移按文件名顺序执行、幂等可重复执行，通过 `PRAGMA user_version` 记录版本。
+0003 只新增可验证追加账本的三张表（`event_logs` / `log_leaves` / `log_nodes`），
+不改写上表任何列或行。
 
 #### 5.1 下游 HTTP 发送工人（`outbound.py`，`migrations/0002_delivery.sql`）
 
@@ -327,6 +329,125 @@ python3 -I partner_webhook/cli.py --db webhook.db \
 - **查询不读源库**：同步后可暂时无法访问源库仍能执行（验收演示会实际改名
   源库后查询）。
 
+### 9. 可验证追加账本（`merkle.py` / `eventlog.py` / `verifylog.py`）
+
+合作方交来事件后，服务端在接收事务里把事件追加进**按合作方独立**的哈希账本。
+合作方保存当时的检查点，事后用离线核验入口就能核对：事件确实记在账里，且之后
+的账本只增加了事件、没有删除或替换旧前缀。这项能力记录**接收端的承诺**——不证明
+下游已经收到数据，也不证明正文的业务真实性。
+
+#### 哈希协议（两端的唯一编码）
+
+H 为 SHA-256；一片叶子的原文依次拼接：
+
+```
+ASCII "PWLOG1"
+|| u32be(len(partner_id UTF-8)) || partner_id UTF-8
+|| u32be(len(event_id UTF-8))   || event_id UTF-8
+|| u64be(source_seq)
+|| 32 字节正文 SHA-256 原文
+```
+
+- 叶哈希 `H(0x00 || 叶原文)`，内部节点 `H(0x01 || 左 || 右)`，空树根 `H(空字节)`；
+- 身份**不做 Unicode 规范化**，也不允许用分隔符拼接替代长度前缀；
+- 长度超出 4 字节、序号超出 8 字节的整数明确拒绝（布尔值不算整数）。
+
+非空树只有一叶时根就是叶哈希；其余情况取「严格小于叶数的最大 2 次幂 k」切成
+左右两树后递归组合。**不补虚拟叶**，也不把最后一片复制配对。本实现对该规则适用
+于任意树长（3、5、9 叶等非满二叉树都按同一递归处理）。
+
+#### 安装与追加
+
+```bash
+# 在已有接收库上为合作方安装账本（纳入已有 accepted_events）
+python3 -I partner_webhook/cli.py log-install --partner acme
+# 之后照常收件；首次接受的事件在同一事务里追加叶子
+```
+
+- 安装按 `accepted_events.ingest_record_id` **递增**纳入历史，与可能稀疏/倒序的
+  `source_seq` 无关；叶子序号从 0 连续增长。
+- 每个合作方首次安装时随机生成独立 `log_id`；重复安装只复核，**不换号、不重排、
+  不追加**。已安装账本与 `accepted_events` 不一致时明确拒绝。
+- 安装逐条核对正文确实存在、长度与摘要吻合；任何一条不符都整次拒绝，不留半份
+  账本。新来件沿用实际接收路径取得的原字节摘要。
+- 安装持有数据库写锁；期间到达的收件等待锁释放后再判定，不会漏掉交界处的事件，
+  也不会被算错位置。
+- 追加只发生在**首次接受**：重复投递、同号异载荷冲突、拒收都不追加。
+- 只新增 `event_logs` / `log_leaves` / `log_nodes` 三张表；`raw_bodies`、
+  `ingest_records`、`accepted_events`、`outbox` 的业务含义与行都不变。
+
+#### 并发与回滚
+
+接收事务先 `BEGIN IMMEDIATE` 取得 SQLite 跨进程写锁，再判断去重/冲突并在同一事务
+内追加叶子。因此两个独立进程同时收件时，已接受记录与叶子一一对应，叶序号连续，
+不依赖 Python 线程锁。接收过程中任何异常都回滚整个事务：不会留下幽灵叶子，也不
+会出现 `accepted_events` 已提交而账本没记。
+
+#### 检查点、在账证明与一致性证明
+
+```bash
+# 当前检查点（单行一致读取；已发出的旧检查点不因新收件改变）
+python3 -I partner_webhook/cli.py log-checkpoint --partner acme --out cp-09.json
+# 指定旧 tree_size 重建旧前缀（只读持久节点，不重扫事件/正文）
+python3 -I partner_webhook/cli.py log-checkpoint --partner acme --tree-size 5 --out cp-05.json
+# 为旧前缀下的一条事件生成在账证明
+python3 -I partner_webhook/cli.py log-prove-inclusion --partner acme \
+  --event-id evt-5 --tree-size 5 --out proof.json
+# 为旧/新检查点生成前后追加关系证明
+python3 -I partner_webhook/cli.py log-prove-consistency --partner acme \
+  --old-checkpoint cp-05.json --new-checkpoint cp-09.json --out cons.json
+```
+
+检查点文件包含 `log_id`、`partner_id`、`tree_size`、`root_hash`（以及 `format`、
+`version`、`protocol`）。
+
+- **在账证明**返回叶原文对应字段（事件 ID、source_seq、正文摘要）、`leaf_index`
+  和从叶到根的兄弟路径。对应递归规则：索引在左树时递归左树再附右树根；在右树时
+  递归右树再附左树根。不存在的事件、尚未进入指定前缀的事件、越界树长都报错。
+  证明不携带其他事件的身份或正文，也不接受「另附整份清单」来核验。
+- **一致性证明**使用最小子树递归 `C(m, D, b)`：`m` 等于段长时 `b=true` 返回空路径、
+  `b=false` 返回本段根；否则按该段 k 切分，`m<=k` 时先递归左段再附右段根，
+  `m>k` 时先递归右段（`b=false`）再附左段根。实现通过节点范围按需读取，不取出
+  整个 D。`0->n` 与相同树长的证明都为空（相同树长还要求两根相等）。两端检查点
+  的合作方、`log_id`、协议必须相同，大小不能倒退；生成时拒绝根与本地相应前缀
+  不符的检查点。
+
+#### 持久节点与读取代价
+
+`log_nodes` 保存**已经形成**的完整子树节点（`level` 为子树高度，`node_index` 为
+起始叶 / 2^level）。正常追加只合并受新叶影响的 O(log n) 个节点，旧节点从不改写；
+旧树根、在账路径与一致性路径都从这些节点按需组合。生成一条证明不扫描全部事件、
+全部叶子或原正文。`--show-reads` 会输出本次操作的节点读取计数，计量范围是
+`event_logs` 元数据点查、`log_nodes` / `log_leaves` 的主键点查次数与返回行数
+（不含 SQLite 内部页读取与检查点文件本身）。验收脚本实测：20000 叶时读取当前
+检查点 0 次节点、旧前缀一半 5 次、在账证明 15 次、一致性证明 24 次，全部走
+主键索引（执行计划为 `SEARCH ... USING INDEX`，没有 `SCAN log_nodes`）。
+
+#### 离线核验入口（不访问数据库）
+
+```bash
+# 调用方明确传入自己保存且信任的检查点 + 待验叶子
+python3 -I partner_webhook/verifylog.py inclusion \
+  --checkpoint cp-05.json --proof proof.json \
+  --event-id evt-5 --source-seq 7 --body-sha256 <64 hex>
+# 调用方传入两份可信检查点 + 一致性证明
+python3 -I partner_webhook/verifylog.py consistency \
+  --old-checkpoint cp-05.json --new-checkpoint cp-09.json --proof cons.json
+```
+
+`verifylog.py` 只 import 标准库与 `merkle.py`，不 import `sqlite3`、不读账本节点
+文件。它只用调用方的可信根与证明里的叶字段/路径重建根，**绝不把证明自带的根当作
+可信根**。错叶、错位置、修改/缺少/多余路径节点、非法十六进制、布尔值冒充整数、
+跨合作方、跨 `log_id`、树长倒退都返回失败与非零退出码。空树检查点不能为叶子出
+证明；一叶树的在账路径为空、一致性 `0->1` 路径为空，均有实际可用行为。
+
+#### 信任边界
+
+没有签名服务，也没有全网见证。哈希证明依赖**调用方自己保管的可信检查点**：如果
+调用方从未保存过检查点，或保存的检查点本身被替换，这些证明无法救回。本服务也
+不能独自阻止它向两名从未交换过检查点的客户展示两套不同历史（split-view），更
+不证明正文的业务真实性。要防止 split-view，需要客户之间或第三方见证交换检查点。
+
 
 ## 目录结构
 
@@ -349,8 +470,12 @@ partner_webhook/
   direct_eval.py 小样本独立核对器（直接解释 JSON 树，不走索引 SQL）
   outbound.py    下游 HTTP 发送工人（按合作方队首、持久占用、逐次尝试）
   receiver.py    可控下游接收器（本机环回，保存字节/头部/落地键）
+  merkle.py      可验证追加账本的哈希协议与证明核验（纯函数，不依赖 SQLite）
+  eventlog.py    按合作方独立的追加账本（节点持久化、检查点、证明生成）
+  verifylog.py   离线核验入口（不 import sqlite3、不读账本节点文件）
 migrations/0001_init.sql
 migrations/0002_delivery.sql  下游投递：接收地址、投递状态/占用、逐次尝试、人工动作
+migrations/0003_event_log.sql 按合作方独立的可验证追加账本（叶位置与子树节点）
 partner_webhook/migrations/   同一迁移的包内副本（打包安装时随包分发，需与上者保持同步）
 config.example.json
 tests/           自动化测试
@@ -359,11 +484,14 @@ scripts/index_acceptance.py     正文索引验收材料（真实收件/同步/�
 scripts/archive_acceptance.py   档案加工验收材料（真实收件/乱序/分支/选择/崩溃恢复）
 scripts/archive_examples.py     档案加工手写小例子（期望不来自正式加工函数）
 scripts/outbound_acceptance.py  下游发送验收（受控接收器、退避、断开、并发接手、迁移前记录）
+scripts/prooflog_acceptance.py  账本验收（检查点、在账/一致性证明、离线核验、并发、回滚、大样本）
+scripts/prooflog_reference.py   账本哈希协议的手写递归参考实现（不 import 正式节点/证明函数）
 demo.sh          在线收件端到端演示（本地环回，不连外网）
 demo_salvage.sh  提取器验收演示（真实破坏与退出码矩阵）
 demo_index.sh    正文索引验收演示（反例、跨元素、同步增删改、崩溃恢复）
 demo_archive.sh  档案加工验收演示（乱序等待、分支退回、人工选择、跨方拒绝）
 demo_outbound.sh 下游发送演示（登记地址、429 退避、永久失败与人工重试、逐字节核对）
+demo_prooflog.sh 账本演示（安装、检查点、在账/一致性证明、离线核验、源库移走）
 ```
 
 ## 快速开始
@@ -412,6 +540,19 @@ python3 -I partner_webhook/cli.py send \
 | `archive-dispositions` | 查看每条来件的处置（等待/分支/失败/阻断等）与原因 |
 | `archive-revisions` | 查看一份档案的修订候选、分支与人工选择 |
 | `archive-select` / `archive-deselect` | 按坐标人工选择/撤销采用的源事件 |
+| `log-install --partner P` | 安装/复核合作方可验证追加账本（纳入已有事件） |
+| `log-status [--partner P]` | 查看账本树长、根、叶数与已接受事件数 |
+| `log-checkpoint --partner P [--tree-size N] --out F` | 读取当前或指定旧树长的检查点 |
+| `log-prove-inclusion --partner P --event-id E [--tree-size N] --out F` | 生成在账证明（`--show-reads` 输出节点读取计数） |
+| `log-prove-consistency --partner P --old-checkpoint A --new-checkpoint B --out F` | 生成前后追加关系证明 |
+
+离线核验（不访问数据库，退出码 0 成立 / 1 核验失败 / 2 输入非法）：
+
+| 命令 | 说明 |
+| --- | --- |
+| `python3 -I partner_webhook/verifylog.py inclusion --checkpoint A --proof P --event-id E --source-seq N --body-sha256 HEX` | 用调用方可信检查点核验一条事件的在账证明 |
+| `python3 -I partner_webhook/verifylog.py consistency --old-checkpoint A --new-checkpoint B --proof P` | 用两份可信检查点核验前后追加关系 |
+| `python3 -I partner_webhook/verifylog.py checkpoint --checkpoint A` | 解析并显示一份检查点 |
 
 离线抢救（独立于上表，不经过在线入口）：
 
@@ -483,7 +624,22 @@ python3 -I -m unittest discover -s tests -t . -v
   下游发送验收材料可复跑：`python3 -I scripts/outbound_acceptance.py`
   （131 项断言，含真实环回、受控接收器、两进程并发与迁移前库）。
 
-一键演示：`bash demo.sh`（在线收件）；`bash demo_salvage.sh`（离线抢救验收）；
+- 可验证追加账本：固定编码（长度前缀、无 Unicode 规范化、超范围拒绝）；
+  任意树长的根/在账路径/一致性路径与手写递归参考实现逐项一致（0..9 全部
+  (m,n) 与每个在账位置）；旧库上安装按 ingest_record_id 纳入历史、重复安装
+  不换号、正文缺失/长度或摘要不符整次拒绝；重复/冲突/拒收不追加、同号
+  不同事件与二进制正文照常追加；两个独立进程交错收件时叶序号连续且与
+  accepted_events 一一对应；提交前抛错回滚不留幽灵叶；旧前缀/证明只按主键
+  读 O(log n) 个节点；`0->n`、相同树长与一叶树行为；离线核验对错叶、错
+  位置、改/缺/多节点、非法十六进制、布尔冒充整数、跨合作方、跨 log_id、
+  树长倒退全部给出非零退出码；数据库移走后凭据仍可核验。
+
+  账本验收材料可复跑：`python3 -I scripts/prooflog_acceptance.py --bulk 20000`
+  （381 项断言，含真实签名收件、离线子进程核验、手写参考实现与 20000 叶
+  节点读取证据）。
+
+  一键演示：`bash demo.sh`（在线收件）；`bash demo_salvage.sh`（离线抢救验收）；
 `bash demo_index.sh`（正文索引验收：反例、组合条件、独立核对、同步增删改与
 崩溃恢复）；`bash demo_archive.sh`（档案加工验收：乱序、分支、人工选择）；
-`bash demo_outbound.sh`（下游发送演示：登记地址、429 退避、人工重试、逐字节核对）。
+`bash demo_outbound.sh`（下游发送演示：登记地址、429 退避、人工重试、逐字节核对）；
+`bash demo_prooflog.sh`（账本演示：安装、检查点、在账/一致性证明与离线核验）。

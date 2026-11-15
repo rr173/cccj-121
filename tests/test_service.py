@@ -382,7 +382,7 @@ class RestartConsistencyTest(WebhookTestCase):
         self.reopen_service()  # 再跑一次迁移
         self.reopen_service()
         version = self.storage.conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 2)
+        self.assertEqual(version, 3)
         # 表都还在且数据未损坏（含投递状态表）
         tables = {
             r[0] for r in self.storage.iter_all(
@@ -392,7 +392,8 @@ class RestartConsistencyTest(WebhookTestCase):
         self.assertTrue(
             {"raw_bodies", "ingest_records", "accepted_events", "outbox",
              "delivery_endpoints", "outbox_delivery",
-             "delivery_attempts", "delivery_operator_actions"}.issubset(tables)
+             "delivery_attempts", "delivery_operator_actions",
+             "event_logs", "log_leaves", "log_nodes"}.issubset(tables)
         )
 
 
