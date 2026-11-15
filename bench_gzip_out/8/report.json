@@ -1,0 +1,36 @@
+{
+  "size_mib": 8,
+  "spacing": 65536,
+  "build_seconds": 2.359463,
+  "extract_seconds": 0.016962,
+  "peak_rss_kib": 30196,
+  "build": {
+    "operation": "build",
+    "partner_id": "p",
+    "event_id": "bench",
+    "source_compressed_bytes": 36988,
+    "decompressed_bytes": 8388608,
+    "member_count": 1,
+    "checkpoint_count": 128,
+    "pages_read": 1,
+    "compressed_bytes_read": 36988,
+    "index_bytes": 5746688,
+    "index_path": "/workspace/bench_gzip_out/8/index-8m.sqlite"
+  },
+  "extract": {
+    "operation": "extract",
+    "partner_id": "p",
+    "event_id": "bench",
+    "range_start": 8388352,
+    "range_length": 128,
+    "range_end": 8388480,
+    "decompressed_size": 8388608,
+    "resume_checkpoint": 8355098,
+    "bytes_skipped_after_checkpoint": 33254,
+    "bytes_decoded": 33510,
+    "pages_read": 1,
+    "compressed_bytes_read": 36988,
+    "output_bytes": 128,
+    "output_path": "/workspace/bench_gzip_out/8/extract-8m.bin"
+  }
+}

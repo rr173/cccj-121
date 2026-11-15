@@ -18,6 +18,7 @@ partner-webhook-signature = "partner_webhook.signature:main"
 partner-webhook-delta = "partner_webhook.delta:main"
 partner-webhook-apply = "partner_webhook.apply:main"
 partner-webhook-delta-inspect = "partner_webhook.deltainspect:main"
+partner-webhook-gzip-index = "partner_webhook.gzip_index:main"
 
 [tool.setuptools]
 packages = ["partner_webhook"]

@@ -1,0 +1,36 @@
+{
+  "size_mib": 32,
+  "spacing": 65536,
+  "build_seconds": 8.832892,
+  "extract_seconds": 0.006672,
+  "peak_rss_kib": 54828,
+  "build": {
+    "operation": "build",
+    "partner_id": "p",
+    "event_id": "bench",
+    "source_compressed_bytes": 146790,
+    "decompressed_bytes": 33554432,
+    "member_count": 1,
+    "checkpoint_count": 511,
+    "pages_read": 3,
+    "compressed_bytes_read": 146790,
+    "index_bytes": 23011328,
+    "index_path": "/workspace/bench_gzip_out/32/index-32m.sqlite"
+  },
+  "extract": {
+    "operation": "extract",
+    "partner_id": "p",
+    "event_id": "bench",
+    "range_start": 33554176,
+    "range_length": 128,
+    "range_end": 33554304,
+    "decompressed_size": 33554432,
+    "resume_checkpoint": 33552668,
+    "bytes_skipped_after_checkpoint": 1508,
+    "bytes_decoded": 1764,
+    "pages_read": 1,
+    "compressed_bytes_read": 15718,
+    "output_bytes": 128,
+    "output_path": "/workspace/bench_gzip_out/32/extract-32m.bin"
+  }
+}
