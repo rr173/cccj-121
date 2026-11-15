@@ -14,6 +14,10 @@ partner-webhook = "partner_webhook.cli:main"
 partner-webhook-salvage = "partner_webhook.salvage:main"
 partner-webhook-receiver = "partner_webhook.receiver:main"
 partner-webhook-verify = "partner_webhook.verifylog:main"
+partner-webhook-signature = "partner_webhook.signature:main"
+partner-webhook-delta = "partner_webhook.delta:main"
+partner-webhook-apply = "partner_webhook.apply:main"
+partner-webhook-delta-inspect = "partner_webhook.deltainspect:main"
 
 [tool.setuptools]
 packages = ["partner_webhook"]

@@ -449,7 +449,113 @@ python3 -I partner_webhook/verifylog.py consistency \
 不证明正文的业务真实性。要防止 split-view，需要客户之间或第三方见证交换检查点。
 
 
-## 目录结构
+### 10. 正文差量交接（`blocksig.py` / `signature.py` / `delta.py` / `apply.py` / `deltainspect.py`）
+
+下游离线加工机手里有一份旧正文；服务端后来又收到一份只改了少量字节的新正文。
+双方不能共享文件系统，也不应为了几个字节重新传整份正文。差量交接把这一过程
+拆成三段**可单独启动**的入口，彼此只交接数据文件：
+
+| 入口 | 谁运行 | 输入 | 输出 |
+| --- | --- | --- | --- |
+| `signature` | 下游 | 旧文件、正整数块长 B、新签名路径 | 块签名（文本无关的二进制） |
+| `delta` | 服务端 | 下游交来的签名、源库 `--partner`/`--event-id`、新差量包路径 | 差量包 |
+| `apply` | 下游 | 旧文件、差量包、新目标路径 | 还原的新正文 |
+| `inspect` | 任意方 | 差量包（或签名） | 只报告身份/长度/指令计数，不输出正文 |
+
+```bash
+# 下游：为旧文件生成签名（签名是二进制，可直接传给服务端）
+python3 -I partner_webhook/signature.py --old old.bin --block-size 4096 --out old.sig
+
+# 服务端：只拿签名 + 收件库中的新正文生成差量包（源库只读）
+python3 -I partner_webhook/delta.py --db webhook.db --partner acme \
+    --event-id evt-new --signature old.sig --out new.delta
+
+# 下游：用旧文件与差量包还原
+python3 -I partner_webhook/apply.py --old old.bin --delta new.delta --out new.bin
+
+# 任何人都可检查包结构（不需要旧文件，不打印业务正文）
+python3 -I partner_webhook/deltainspect.py packet --delta new.delta
+python3 -I partner_webhook/deltainspect.py signature --signature old.sig --index
+```
+
+#### 块签名（`blocksig v1`）
+
+签名严格按旧文件的**连续非重叠 B 字节块**生成，尾块可以短，空文件没有块。
+每块登记：从 0 开始的偏移（u64）、真实长度（u32）、弱校验（u32）与 SHA-256
+强摘要（32 字节）；头部记录格式版本、B、旧文件全长与整文件 SHA-256，末尾是
+覆盖此前全部字节的整文件摘要。格式说明见 `partner_webhook/deltaformat.py`
+模块文档（固定大端字节序、定长字段）。
+
+弱校验定义（`blocksig.py`）：长度为 L 的字节串 x，
+
+```
+a = sum(x[i]) mod 65536
+b = sum((L - i) * x[i]) mod 65536       # i 从 0 开始
+weak = (b << 16) | a
+```
+
+窗口右移一字节、移出 u 加入 v 时用滚动关系
+
+```
+a' = (a - u + v) mod 65536
+b' = (b - L*u + a') mod 65536
+```
+
+生产路径实际执行该递推（统计里的 `roll_updates`），不对每个窗口重求整窗和；
+**强摘要只在弱值+长度命中候选后**才比较。弱值相同绝不代表内容相同：验收里
+构造了一对弱值相同、内容不同的块，证明只有强摘要一致的块才被 COPY 复用。
+
+#### 确定性 COPY 选择
+
+`delta` 在新正文从左向右滑动长度 B 的窗口：
+
+1. 窗口弱值+长度在签名中可能有候选；按**偏移升序**逐个比较强摘要，第一个
+   强摘要相同的候选即命中，输出 `COPY(offset,length)` 并跳过整块；
+2. 无命中则窗口前进一字节；有命中先输出此前的字面字节；
+3. 内容相同的旧块可能有多个，**一律选择偏移最小的一个**；
+4. 旧尾块短于 B 时，仅在新正文**剩余长度恰为该短块长度**时尝试匹配；其他
+   短片段原样进入字面数据；
+5. `COPY` 只能引用签名中的一个**完整块**，不能跨块或任意截取；
+6. 字面数据按 `LITERAL_MAX` 上限切成多条 `LITERAL`，长时间无命中也不会无限
+   积累（扫描器每走一字节就把它转入有界字面缓冲）。
+
+这些规则既写在模块文档里，也由 `scripts/delta_reference.py` 的独立慢速匹配器
+（逐窗重求弱值、直接按字节比较旧块）交叉核对，避免测试只比较“解得出来”。
+
+#### 差量包格式（`pwdelta v1`）
+
+固定头：magic、版本、合作方/事件身份长度与 UTF-8 身份、B、旧文件长度/摘要、
+新正文长度/摘要、LITERAL/COPY 上限；随后只有 `COPY`（offset u64 + length
+u32）与 `LITERAL`（length u32 + 原始字节）两种指令；结束标记 `PWEND001` 后是
+覆盖整包的 SHA-256。读取端严格核对版本、字段范围、UTF-8 身份、指令长度、
+COPY 边界（块对齐 + 完整块 + 不越旧文件）、目标总长、结束标记、整包摘要及
+结束后无额外字节；对身份长度、B、单条指令、总输出字节都有可调上限，**先检查
+声明再分配**。所有读取走 `read_exact` 循环，能处理每次只返回 1..7 字节的短读。
+
+#### 安全与内存边界
+
+`apply` 先核对旧文件整文件长度与 SHA-256，再执行指令，最后**独立**计算新正文
+摘要并与头部一致才把临时文件改名为目标；任何失败都删除临时文件，不留下可误当
+完整新正文的目标，已有目标拒绝覆盖。旧文件错一字节、COPY 越界/不对齐、字面截
+短、新摘要不符、未知指令、缺结束标记或尾随数据都会失败并返回非零，错误信息带
+可定位的包偏移。签名本身也严格校验块位置/长度恰好覆盖旧文件、块数、弱值范围、
+摘要字段、整文件摘要与结尾；损坏签名不会被当成空签名而退化为发送全文。
+
+内存构成：签名端只保留一个块与分块读缓冲；`delta` 端是固定 8 MiB 扫描缓冲 +
+SQLite 页缓存（固定上限）+ 有界字面缓冲；签名查找放在**临时 SQLite 索引**里
+（`(length, weak, offset)`），候选逐条流式读取，不把所有块签名/弱值桶/碰撞候选
+一次装进内存，重复旧块也不会让内存随数量增长；`apply` 端流式读写旧文件与包。
+实测 16/48/96 MiB 正文峰值内存接近常数（验收脚本会打印）。
+
+可信边界：这套工具只做**内容完整性**与**已有版本之间的字节复用**，签名和差量
+包都没有外部认证，也没有 HMAC/签名服务；它不能抵抗恶意发送方伪造所有头部，
+也不证明正文的业务真实性。
+
+验收材料：`python3 -I scripts/delta_acceptance.py`（双方分离交接、手工小例子
+指令与弱校验预期、慢速参考匹配器交叉核对、弱碰撞、候选压力、错误矩阵、1..7
+字节短读、几十 MiB 头部插入的实际统计与另一进程复核）。
+
+
 
 ```
 partner_webhook/
@@ -473,6 +579,11 @@ partner_webhook/
   merkle.py      可验证追加账本的哈希协议与证明核验（纯函数，不依赖 SQLite）
   eventlog.py    按合作方独立的追加账本（节点持久化、检查点、证明生成）
   verifylog.py   离线核验入口（不 import sqlite3、不读账本节点文件）
+  blocksig.py    弱校验定义与滑动递推（纯函数）
+  deltaformat.py 正文差量交接的二进制格式常量、编码与严格读取包装
+  signature.py   旧文件块签名生成与严格校验（signature 入口）
+  delta.py       按签名与收件正文生成差量包（delta 入口，临时 SQLite 索引）
+  apply.py       用旧文件与差量包还原新正文（apply / inspect 入口，严格校验）
 migrations/0001_init.sql
 migrations/0002_delivery.sql  下游投递：接收地址、投递状态/占用、逐次尝试、人工动作
 migrations/0003_event_log.sql 按合作方独立的可验证追加账本（叶位置与子树节点）
@@ -486,12 +597,15 @@ scripts/archive_examples.py     档案加工手写小例子（期望不来自正
 scripts/outbound_acceptance.py  下游发送验收（受控接收器、退避、断开、并发接手、迁移前记录）
 scripts/prooflog_acceptance.py  账本验收（检查点、在账/一致性证明、离线核验、并发、回滚、大样本）
 scripts/prooflog_reference.py   账本哈希协议的手写递归参考实现（不 import 正式节点/证明函数）
+scripts/delta_reference.py      差量匹配的独立慢速参考实现（不 import 正式 delta/signature）
+scripts/delta_acceptance.py     差量交接验收（分离交接、手工例子、弱碰撞、错误矩阵、短读、大样本）
 demo.sh          在线收件端到端演示（本地环回，不连外网）
 demo_salvage.sh  提取器验收演示（真实破坏与退出码矩阵）
 demo_index.sh    正文索引验收演示（反例、跨元素、同步增删改、崩溃恢复）
 demo_archive.sh  档案加工验收演示（乱序等待、分支退回、人工选择、跨方拒绝）
 demo_outbound.sh 下游发送演示（登记地址、429 退避、永久失败与人工重试、逐字节核对）
 demo_prooflog.sh 账本演示（安装、检查点、在账/一致性证明、离线核验、源库移走）
+demo_delta.sh   正文差量交接演示（只传签名与差量包、移走源库后还原、逐字节核对）
 ```
 
 ## 快速开始
@@ -545,6 +659,16 @@ python3 -I partner_webhook/cli.py send \
 | `log-checkpoint --partner P [--tree-size N] --out F` | 读取当前或指定旧树长的检查点 |
 | `log-prove-inclusion --partner P --event-id E [--tree-size N] --out F` | 生成在账证明（`--show-reads` 输出节点读取计数） |
 | `log-prove-consistency --partner P --old-checkpoint A --new-checkpoint B --out F` | 生成前后追加关系证明 |
+
+正文差量交接（独立入口，不经过 HTTP，也不改收件/outbox/档案/账本）：
+
+| 命令 | 说明 |
+| --- | --- |
+| `python3 -I partner_webhook/signature.py --old F --block-size B --out S` | 下游为旧文件生成块签名 |
+| `python3 -I partner_webhook/delta.py --db D --partner P --event-id E --signature S --out X` | 服务端由收件正文与签名生成差量包（源库只读） |
+| `python3 -I partner_webhook/apply.py --old F --delta X --out N` | 下游用旧文件与差量包还原新正文（严格校验后交付） |
+| `python3 -I partner_webhook/deltainspect.py packet --delta X` | 只读检查差量包（不输出正文） |
+| `python3 -I partner_webhook/deltainspect.py signature --signature S` | 严格检查签名结构与块数 |
 
 离线核验（不访问数据库，退出码 0 成立 / 1 核验失败 / 2 输入非法）：
 
@@ -603,6 +727,19 @@ python3 -I -m unittest discover -s tests -t . -v
 正文索引验收材料可复跑：`python3 -I scripts/index_acceptance.py`（100 项
 断言，含逐表达式与直接 JSON 解释器的交叉核对）。
 
+- 正文差量交接：滚动弱校验定义与递推（逐窗重求对照）、空文件无块、尾块长度、
+  签名严格校验（magic/版本/块长/块数/偏移长度覆盖/整文件摘要/截短/损坏不退化
+  为空签名）；开头插入、内部删除、局部替换、重复块（一律最小偏移）、空旧文件、
+  空新正文、短于一块、短尾块；与独立慢速参考匹配器逐条比对 COPY 选择；弱值
+  相同但内容不同的块只复用强摘要一致的块；大量重复候选下强摘要次数与内存不
+  随候选数增长；错旧文件一字节/长度不符/损坏签名/COPY 越界与不对齐/字面截短/
+  新摘要不符/未知指令/缺结束/尾随数据均非零退出且不留下目标；`read_chunk_limit`
+  与 1..7 字节短读包装；源库、旧文件、签名、包摘要不变。
+
+差量交接验收材料可复跑：`python3 -I scripts/delta_acceptance.py`（137 项断言，
+含双方分离交接、手工小例子、弱碰撞、候选压力、错误矩阵、短读矩阵、48 MiB
+头部插入的实际统计与另一进程复核）。
+
 - 档案加工：RFC 6901 指针（空键/~ 转义/未知转义/对象数字键 vs 数组规范
   下标/`-` 语义）；六操作、move 删除后定位与禁入后代、copy 独立树、test
   精确比较（超大整数、布尔≠数字、`1`==`1.0`）；原子回滚不改原对象、根
@@ -642,4 +779,5 @@ python3 -I -m unittest discover -s tests -t . -v
 `bash demo_index.sh`（正文索引验收：反例、组合条件、独立核对、同步增删改与
 崩溃恢复）；`bash demo_archive.sh`（档案加工验收：乱序、分支、人工选择）；
 `bash demo_outbound.sh`（下游发送演示：登记地址、429 退避、人工重试、逐字节核对）；
-`bash demo_prooflog.sh`（账本演示：安装、检查点、在账/一致性证明与离线核验）。
+`bash demo_prooflog.sh`（账本演示：安装、检查点、在账/一致性证明与离线核验）；
+`bash demo_delta.sh`（正文差量交接演示：只传签名与包、移走源库后还原并逐字节核对）。
